@@ -6,8 +6,11 @@ at construction time so missing optional dependencies degrade gracefully to stub
 API keys are read from environment variables:
   ANTHROPIC_API_KEY, OPENAI_API_KEY, XAI_API_KEY, GEMINI_API_KEY
 
-Grok uses the official xai-sdk (gRPC-based), not the OpenAI-compatible REST layer.
-Install: pip install preon-systems-cell[grok]
+Grok intentionally uses the OpenAI-compatible REST endpoint (api.x.ai/v1) via the
+openai SDK rather than the native xai-sdk. The xai-sdk uses gRPC with server-side
+agentic tool calling (web search, X search, code execution) that runs autonomously
+inside chat.sample() — violating the "one LLM call per protein" constraint. The
+OpenAI-compatible path gives a plain, non-agentic single completion call.
 """
 from __future__ import annotations
 
@@ -92,28 +95,6 @@ class _OpenAIAdapter:
         return resp.choices[0].message.content or ""
 
 
-class _GrokNativeAdapter:
-    """Official xAI SDK adapter — gRPC-based, not the OpenAI-compatibility layer.
-
-    pip install xai-sdk
-    Docs: https://docs.x.ai
-    """
-
-    def __init__(self, model_id: str) -> None:
-        from xai_sdk import Client  # pip install xai-sdk
-        from xai_sdk.chat import user as _user
-        self._client = Client()  # reads XAI_API_KEY from env
-        self._user_msg = _user
-        self._model = model_id
-
-    def complete(self, prompt: str, system: str | None = None, max_tokens: int = 2048) -> str:
-        chat = self._client.chat.create(model=self._model)
-        full_prompt = f"{system}\n\n{prompt}" if system else prompt
-        chat.append(self._user_msg(full_prompt))
-        response = chat.sample()
-        return response.content
-
-
 class _GeminiAdapter:
     def __init__(self, model_id: str) -> None:
         import google.generativeai as genai  # pip install google-generativeai
@@ -152,7 +133,11 @@ def get_adapter(provider: str, model_class: str, model_id: str | None = None) ->
         if provider == "openai":
             return _OpenAIAdapter(resolved_model)
         if provider == "grok":
-            return _GrokNativeAdapter(resolved_model)
+            return _OpenAIAdapter(
+                resolved_model,
+                base_url="https://api.x.ai/v1",
+                api_key_env="XAI_API_KEY",
+            )
         if provider == "gemini":
             return _GeminiAdapter(resolved_model)
     except ImportError:

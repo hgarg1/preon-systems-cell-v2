@@ -43,14 +43,11 @@ openai = [
 gemini = [
     "google-generativeai>=0.8",
 ]
-grok = [
-    "xai-sdk>=1.0",
-]
+# grok uses the openai SDK with base_url=https://api.x.ai/v1 — pip install preon-systems-cell[openai]
 llm = [
     "anthropic>=0.40",
     "openai>=1.50",
     "google-generativeai>=0.8",
-    "xai-sdk>=1.0",
 ]
 
 [project.scripts]
