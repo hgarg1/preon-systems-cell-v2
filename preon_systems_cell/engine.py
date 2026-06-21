@@ -470,6 +470,7 @@ class Ribosome:
             consensus_path = []
 
         token_budget = module.token_budget or 4096
+        timeout_seconds = max(10, (module.latency_budget_ms or 5000) // 1000)
 
         # Try primary provider, then walk fallback chain
         t0 = time.monotonic()
@@ -514,7 +515,7 @@ class Ribosome:
                 "consensus_path": consensus_path,
             }
 
-        result = adapter.complete(prompt, max_tokens=token_budget)
+        result = adapter.complete(prompt, max_tokens=token_budget, timeout_seconds=timeout_seconds)
         latency_ms = int((time.monotonic() - t0) * 1000)
 
         log_execution(ModelExecutionTelemetry(
@@ -729,18 +730,28 @@ class OrganismRuntime:
         return memory
 
     def recall_memory(self, signal: Signal) -> list[MemoryRecord]:
+        from datetime import datetime, timezone
         memories = self.stores.memory_records.get(signal.organism_id, [])
-        recalled = [
-            memory
-            for memory in memories
-            if memory.status == RecordStatus.ACTIVE
-            and (
-                memory.kind == signal.type
-                or memory.scope in signal.context_refs
-                or any(ref in str(memory.payload) for ref in signal.context_refs)
-            )
-        ]
-        return recalled[:5]
+        now = datetime.now(timezone.utc)
+        scored: list[tuple[float, MemoryRecord]] = []
+        for memory in memories:
+            if memory.status != RecordStatus.ACTIVE:
+                continue
+            score = 0.0
+            if memory.kind == signal.type:
+                score += 2.0
+            if memory.scope in signal.context_refs:
+                score += 1.5
+            elif any(ref in str(memory.payload) for ref in signal.context_refs):
+                score += 1.0
+            if score == 0.0:
+                continue  # no relevance signal at all — skip
+            age_hours = (now - memory.created_at).total_seconds() / 3600
+            score += 1.0 / (1.0 + age_hours)   # recency bonus: decays toward 0 with age
+            score += memory.confidence * 0.5
+            scored.append((score, memory))
+        scored.sort(key=lambda t: t[0], reverse=True)
+        return [m for _, m in scored[:5]]
 
     def write_memory_from_protein(self, signal: Signal, protein: Protein) -> MemoryRecord | None:
         if protein.status not in {ProteinStatus.APPROVED, ProteinStatus.REPAIRED}:

@@ -15,7 +15,8 @@ OpenAI-compatible path gives a plain, non-agentic single completion call.
 from __future__ import annotations
 
 import os
-from typing import Protocol, runtime_checkable
+import time
+from typing import Callable, Protocol, runtime_checkable
 
 # Default model IDs per provider × model class.
 # Overridden by GenomeModule.llm_model_id when set.
@@ -50,9 +51,41 @@ _ENV_KEYS: dict[str, str] = {
 }
 
 
+def _retryable(exc: Exception) -> bool:
+    """Return True if the exception represents a transient provider error worth retrying."""
+    # Most provider SDKs surface HTTP status via .status_code or .response.status_code
+    http_code = getattr(exc, "status_code", None) or getattr(
+        getattr(exc, "response", None), "status_code", None
+    )
+    if isinstance(http_code, int) and http_code in (429, 500, 502, 503, 529):
+        return True
+    # google.api_core.exceptions use a numeric .code attribute (gRPC codes map to HTTP)
+    grpc_code = getattr(exc, "code", None)
+    if callable(grpc_code):
+        grpc_code = grpc_code()
+    if isinstance(grpc_code, int) and grpc_code in (8, 13, 14):  # ResourceExhausted, Internal, Unavailable
+        return True
+    return False
+
+
+def _with_retry(fn: Callable[[], str], max_attempts: int = 2, base_delay: float = 1.0) -> str:
+    """Run fn(), retrying once on transient provider errors with exponential back-off."""
+    for attempt in range(max_attempts):
+        try:
+            return fn()
+        except Exception as exc:
+            if attempt < max_attempts - 1 and _retryable(exc):
+                time.sleep(base_delay * (2 ** attempt))
+                continue
+            raise
+    raise RuntimeError("unreachable")  # satisfies type checker
+
+
 @runtime_checkable
 class LlmAdapter(Protocol):
-    def complete(self, prompt: str, system: str | None = None, max_tokens: int = 2048) -> str: ...
+    def complete(
+        self, prompt: str, system: str | None = None, max_tokens: int = 2048, timeout_seconds: int = 30
+    ) -> str: ...
 
 
 class _AnthropicAdapter:
@@ -61,12 +94,18 @@ class _AnthropicAdapter:
         self._client = anthropic.Anthropic()
         self._model = model_id
 
-    def complete(self, prompt: str, system: str | None = None, max_tokens: int = 2048) -> str:
+    def complete(
+        self, prompt: str, system: str | None = None, max_tokens: int = 2048, timeout_seconds: int = 30
+    ) -> str:
+        return _with_retry(lambda: self._create(prompt, system, max_tokens, timeout_seconds))
+
+    def _create(self, prompt: str, system: str | None, max_tokens: int, timeout_seconds: int) -> str:
         msg = self._client.messages.create(
             model=self._model,
             max_tokens=max_tokens,
             system=system or "You are a helpful assistant.",
             messages=[{"role": "user", "content": prompt}],
+            timeout=timeout_seconds,
         )
         return msg.content[0].text  # type: ignore[union-attr]
 
@@ -82,7 +121,12 @@ class _OpenAIAdapter:
         self._client = openai.OpenAI(**kwargs)
         self._model = model_id
 
-    def complete(self, prompt: str, system: str | None = None, max_tokens: int = 2048) -> str:
+    def complete(
+        self, prompt: str, system: str | None = None, max_tokens: int = 2048, timeout_seconds: int = 30
+    ) -> str:
+        return _with_retry(lambda: self._create(prompt, system, max_tokens, timeout_seconds))
+
+    def _create(self, prompt: str, system: str | None, max_tokens: int, timeout_seconds: int) -> str:
         messages = []
         if system:
             messages.append({"role": "system", "content": system})
@@ -91,6 +135,7 @@ class _OpenAIAdapter:
             model=self._model,
             messages=messages,  # type: ignore[arg-type]
             max_tokens=max_tokens,
+            timeout=timeout_seconds,
         )
         return resp.choices[0].message.content or ""
 
@@ -102,11 +147,17 @@ class _GeminiAdapter:
         self._model = genai.GenerativeModel(model_id)
         self._model_id = model_id
 
-    def complete(self, prompt: str, system: str | None = None, max_tokens: int = 2048) -> str:
+    def complete(
+        self, prompt: str, system: str | None = None, max_tokens: int = 2048, timeout_seconds: int = 30
+    ) -> str:
+        return _with_retry(lambda: self._create(prompt, system, max_tokens, timeout_seconds))
+
+    def _create(self, prompt: str, system: str | None, max_tokens: int, timeout_seconds: int) -> str:
         full_prompt = f"{system}\n\n{prompt}" if system else prompt
         resp = self._model.generate_content(
             full_prompt,
             generation_config={"max_output_tokens": max_tokens},
+            request_options={"timeout": timeout_seconds},
         )
         return resp.text
 

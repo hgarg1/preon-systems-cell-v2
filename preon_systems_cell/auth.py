@@ -26,7 +26,8 @@ TOKEN_TTL = timedelta(hours=2)
 SAFE_METHODS = {"GET", "HEAD", "OPTIONS"}
 
 _password_hasher = PasswordHasher() if PasswordHasher is not None else None
-_attempts: dict[str, list[float]] = {}
+
+from preon_systems_cell.rate_limit import auth_rate_limiter  # noqa: E402
 
 
 class SignupRequest(BaseModel):
@@ -541,12 +542,8 @@ def require_csrf(request: Request) -> None:
 
 
 def check_rate_limit(key: str, limit: int = 8, window_seconds: int = 300) -> None:
-    now = time.time()
-    attempts = [item for item in _attempts.get(key, []) if now - item < window_seconds]
-    if len(attempts) >= limit:
+    if not auth_rate_limiter.check_and_record(key, limit, window_seconds):
         raise HTTPException(status_code=status.HTTP_429_TOO_MANY_REQUESTS, detail="too many attempts")
-    attempts.append(now)
-    _attempts[key] = attempts
 
 
 def auth_url(request: Request, path: str, token: str) -> str:

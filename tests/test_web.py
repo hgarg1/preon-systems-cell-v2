@@ -4,7 +4,9 @@ from fastapi.testclient import TestClient
 import pytest
 
 from preon_systems_cell.api import RUNTIME
-from preon_systems_cell.auth import _attempts
+from preon_systems_cell.engine import Cytoplasm, Membrane, Mitochondria, RuntimeStores, Skeleton
+from preon_systems_cell.models import Genome
+from preon_systems_cell.rate_limit import auth_rate_limiter
 from preon_systems_cell.web import app
 
 _SESSION_RE = re.compile(r"preon_session=([^;]+)")
@@ -35,36 +37,16 @@ def _auth_login(email: str, password: str, tc: TestClient | None = None) -> None
 
 @pytest.fixture(autouse=True)
 def reset_runtime_and_auth():
-    RUNTIME.stores.organisms.clear()
-    RUNTIME.stores.cells.clear()
-    RUNTIME.stores.signals.clear()
-    RUNTIME.stores.proteins.clear()
-    RUNTIME.stores.contracts.clear()
-    RUNTIME.stores.events.clear()
-    RUNTIME.stores.structure_requests.clear()
-    RUNTIME.stores.memory_records.clear()
-    RUNTIME.stores.capabilities.clear()
-    RUNTIME.stores.genome_versions.clear()
-    RUNTIME.stores.replay_runs.clear()
-    RUNTIME.stores.policy_versions.clear()
-    RUNTIME.stores.maintenance_runs.clear()
-    RUNTIME.stores.alerts.clear()
-    RUNTIME.stores.reviews.clear()
-    RUNTIME.stores.zygotes.clear()
-    RUNTIME.stores.organs.clear()
-    RUNTIME.stores.tissues.clear()
-    RUNTIME.stores.cell_divisions.clear()
-    RUNTIME.stores.food_intakes.clear()
-    RUNTIME.stores.oxygen_profiles.clear()
-    RUNTIME.stores.umbilical_cords.clear()
-    RUNTIME.stores.souls.clear()
-    RUNTIME.stores.bone_structures.clear()
-    RUNTIME.stores.structure_proposals.clear()
-    RUNTIME.stores.organelle_pipelines.clear()
-    RUNTIME.stores.vesicle_messages.clear()
-    RUNTIME.stores.cytoskeleton.clear()
-    RUNTIME.stores.actor_counts.clear()
-    _attempts.clear()
+    new_stores = RuntimeStores()
+    # OrganismRuntime.__init__ seeds "genome-default"; replicate that here so tests that
+    # use the default genome_id (OrganismRecord.genome_id default) don't get a KeyError.
+    new_stores.genomes["genome-default"] = Genome(genome_id="genome-default")
+    RUNTIME.stores = new_stores
+    RUNTIME.membrane.stores = new_stores
+    RUNTIME.cytoplasm.stores = new_stores
+    RUNTIME.mitochondria.stores = new_stores
+    RUNTIME.skeleton.stores = new_stores
+    auth_rate_limiter.clear()
     client.cookies.clear()
     _auth_login("primary@example.com", PASSWORD)
 
