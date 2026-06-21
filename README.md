@@ -81,6 +81,22 @@ preon-systems-cell-v2/
 │   ├── auth.py                  # Session auth, OAuth2, CSRF
 │   ├── email.py                 # Transactional email via Gmail OAuth2
 │   ├── email_setup.py           # One-time refresh token setup script
+│   ├── llm_providers.py         # Provider adapters (Anthropic, OpenAI, Grok, Gemini)
+│   ├── bones/                   # Phase 1: skeletal capability framework
+│   │   ├── models.py            # BoneContract, EnzymeGene, CompiledEnzyme
+│   │   ├── compiler.py          # EnzymeCompiler + _safe_eval (AST whitelist)
+│   │   ├── cortex.py            # BoneCortex, Osteocyte, Osteoclast, load_defaults()
+│   │   ├── defaults.yaml        # 14 bone contracts + 14 enzyme genes
+│   │   └── data/                # Pure python_ref modules (calculator, periodic table, etc.)
+│   ├── model_routing/           # Phase 2: model interface layer & provider routing
+│   │   ├── types.py             # LlmProteinInstantiationRequest, ModelRoutingDecision, etc.
+│   │   ├── registry.py          # ProviderModelProfile + MODEL_REGISTRY (10 profiles)
+│   │   ├── cell_router.py       # CellModelRouter — Day-One deterministic policy
+│   │   ├── fallback.py          # Fallback chain builder
+│   │   ├── telemetry.py         # ModelExecutionTelemetry in-memory log
+│   │   ├── tissue_council.py    # Stub — Phase 6
+│   │   ├── organ_policy.py      # Stub — Phase 9
+│   │   └── organism_authority.py # Stub — Phase 9
 │   └── storage/                 # PostgreSQL + in-memory stores
 │
 ├── frontend/                    # Next.js 16 Operations Console
@@ -105,8 +121,22 @@ preon-systems-cell-v2/
 └── docs/
     ├── architecture/
     │   └── decisions/           # ADR-001 through ADR-007
+    ├── llm-proteins/            # LLM Protein architecture spec (§1–§19)
+    ├── deployment.md            # Reference topology (Fly.io)
+    ├── deployment/              # Cloud-specific variants
+    │   ├── aws.md               # ECS Fargate + RDS
+    │   ├── azure.md             # Container Apps + Key Vault
+    │   ├── gcp.md               # Cloud Run + Cloud SQL
+    │   └── blended.md           # Cross-provider decision framework
+    ├── implementation-roadmap.md
     └── postgres/                # Schema SQL
 ```
+
+---
+
+## Deployment
+
+See [`docs/deployment.md`](docs/deployment.md) for the reference topology (Fly.io + Vercel) and [`docs/deployment/`](docs/deployment/) for AWS, Azure, GCP, and blended cloud variants. The blended doc includes a decision framework and the Preon-specific recommendation by phase.
 
 ---
 
@@ -119,6 +149,8 @@ preon-systems-cell-v2/
 - Argon2 password hashing
 - PostgreSQL (optional — falls back to in-memory)
 - Gmail OAuth2 SMTP for transactional email (stdlib only, no extra deps)
+- Bones capability framework (deterministic enzyme execution, safe AST evaluator)
+- Model routing layer (Day-One deterministic policy, provider registry, telemetry)
 
 **Frontend**
 - Next.js 16 (App Router)
