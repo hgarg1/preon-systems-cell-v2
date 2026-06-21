@@ -38,6 +38,12 @@ class MisfoldingType(StrEnum):
     TOXIC = "toxic"
 
 
+class GolgiDecision(StrEnum):
+    PASS = "pass"
+    REPAIR = "repair"
+    DESTROY = "destroy"
+
+
 class ContractStatus(StrEnum):
     ACTIVE = "active"
     DEPRECATED = "deprecated"
@@ -122,7 +128,21 @@ class MembraneDecisionAction(StrEnum):
 class ExecutionStrategy(StrEnum):
     PRECOMPUTED = "precomputed"
     DETERMINISTIC_TOOL = "deterministic_tool"
-    LLM_STUB = "llm_stub"
+    LLM_STUB = "llm_stub"   # always mock, never calls a provider
+    LLM = "llm"              # live provider call; falls back to stub if no key
+
+
+class LlmProvider(StrEnum):
+    ANTHROPIC = "anthropic"
+    OPENAI = "openai"
+    GROK = "grok"
+    GEMINI = "gemini"
+
+
+class ModelClass(StrEnum):
+    FAST = "fast"            # haiku / gpt-4o-mini / gemini-flash
+    STANDARD = "standard"    # sonnet / gpt-4o / gemini-pro
+    REASONING = "reasoning"  # opus / o3 / gemini-thinking
 
 
 class Actor(BaseConfigModel):
@@ -153,6 +173,10 @@ class GenomeModule(BaseConfigModel):
     signal_types: list[str] = Field(default_factory=list)
     execution_strategy: ExecutionStrategy = ExecutionStrategy.LLM_STUB
     deterministic_tool: str | None = None
+    # LLM routing — only used when execution_strategy == LLM
+    llm_provider: LlmProvider | None = None
+    llm_model_class: ModelClass | None = ModelClass.STANDARD
+    llm_model_id: str | None = None   # overrides model_class when set
 
 
 class DivisionLoadGate(BaseConfigModel):
@@ -229,7 +253,13 @@ class Genome(BaseConfigModel):
                 execution_strategy=ExecutionStrategy.DETERMINISTIC_TOOL,
                 deterministic_tool="calculator",
             ),
-            GenomeModule(module_id="reasoning", signal_types=["query"], execution_strategy=ExecutionStrategy.LLM_STUB),
+            GenomeModule(
+                module_id="reasoning",
+                signal_types=["query", "task.plan"],
+                execution_strategy=ExecutionStrategy.LLM,
+                llm_provider=LlmProvider.ANTHROPIC,
+                llm_model_class=ModelClass.STANDARD,
+            ),
             GenomeModule(
                 module_id="contract_call",
                 signal_types=["contract.call"],
@@ -318,6 +348,83 @@ class Protein(BaseConfigModel):
     status: ProteinStatus = ProteinStatus.GENERATED
     validation_report: ValidationReport = Field(default_factory=lambda: ValidationReport(valid=True))
     created_at: datetime = Field(default_factory=utc_now)
+
+
+class LlmProtein(BaseConfigModel):
+    """Active execution unit — makes exactly one LLM call, then deconstructed by Proteasome."""
+    protein_id: str = Field(min_length=1)
+    organism_id: str = Field(min_length=1)
+    source_signal_id: str = Field(min_length=1)
+    gene_id: str = Field(min_length=1)
+    provider: str = Field(min_length=1)
+    model_class: str = Field(min_length=1)
+    raw_answer: Any | None = None
+    consumed: bool = False
+    created_at: datetime = Field(default_factory=utc_now)
+
+
+class ProteasomeReceipt(BaseConfigModel):
+    protein_id: str
+    cytoplasm_slot: str
+    raw_answer: Any
+    source_gene_id: str
+    provider: str
+
+
+class CytoplasmEntry(BaseConfigModel):
+    value: Any
+    metadata: dict[str, Any] = Field(default_factory=dict)
+    written_at: datetime = Field(default_factory=utc_now)
+
+
+class CytoplasmSnapshot(BaseConfigModel):
+    slots: dict[str, CytoplasmEntry]
+
+
+class ProteinDestination(BaseConfigModel):
+    kind: Literal["cytoplasm", "cell", "membrane"]
+    slot: str | None = None
+    cell_id: str | None = None
+
+
+class AnswerProtein(BaseModel):
+    """Immutable transport payload produced after Proteasome deconstructs an LlmProtein."""
+    model_config = ConfigDict(frozen=True, extra="forbid", populate_by_name=True, serialize_by_alias=True)
+
+    answer_protein_id: str = Field(min_length=1)
+    answer: Any
+    source_gene_id: str
+    source_provider: str
+    confidence: float | None = Field(default=None, ge=0.0, le=1.0)
+    destination: ProteinDestination
+    metadata: dict[str, Any] = Field(default_factory=dict)
+
+    def route_key(self) -> str:
+        if self.destination.kind == "cytoplasm":
+            return f"cytoplasm:{self.destination.slot}"
+        if self.destination.kind == "cell":
+            return f"cell:{self.destination.cell_id}"
+        return "membrane"
+
+
+class GolgiReport(BaseConfigModel):
+    decision: GolgiDecision
+    reasons: list[str] = Field(default_factory=list)
+    protein: AnswerProtein | None = None
+
+
+class RetrySignal(BaseConfigModel):
+    signal_type: str = "retry"
+    payload: dict[str, Any] = Field(default_factory=dict)
+    metadata: dict[str, Any] = Field(default_factory=dict)
+
+
+class DestructionRecord(BaseConfigModel):
+    protein_id: str
+    reason: str
+    rolled_back_slots: list[str] = Field(default_factory=list)
+    destroyed_at: datetime = Field(default_factory=utc_now)
+    retry_signal: RetrySignal | None = None
 
 
 class Contract(BaseConfigModel):

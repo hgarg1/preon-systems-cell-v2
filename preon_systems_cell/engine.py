@@ -188,15 +188,58 @@ class Cytoplasm:
         return updated, skipped
 
 
+_MATH_EXPR_RE = re.compile(r"^\s*[\d\s\.\+\-\*/\(\)\^%]+\s*$")
+_DECOMPOSE_RE = re.compile(r"\b(plan|steps?\s+to|how\s+do\s+i|first\s+.{1,40}\s+then|break\s*down|decompose|sub.?tasks?)\b", re.I)
+
+
+class SignalClassifier:
+    """Rule-based signal type classifier — no LLM required.
+
+    Reclassifies ambiguous `query` signals based on payload heuristics so the
+    nucleus can route them to the right module without burning LLM tokens.
+    Only applies to type="query"; all other types are returned unchanged.
+    """
+
+    def reclassify(self, signal: Signal) -> str:
+        if signal.type != "query":
+            return signal.type
+
+        prompt = signal.payload.get("prompt", "")
+        if not isinstance(prompt, str):
+            return signal.type
+
+        # Explicit expression key takes priority
+        expr = signal.payload.get("expression")
+        if expr is not None and _MATH_EXPR_RE.match(str(expr)):
+            return "calculate"
+
+        # Pure math in the prompt text
+        if _MATH_EXPR_RE.match(prompt):
+            return "calculate"
+
+        # Decomposition / planning language
+        if _DECOMPOSE_RE.search(prompt):
+            return "task.plan"
+
+        return "query"
+
+
 class Nucleus:
+    def __init__(self, classifier: SignalClassifier | None = None) -> None:
+        self._classifier = classifier or SignalClassifier()
+
     def select_module(self, genome: Genome, cell: CellRecord, signal: Signal) -> GenomeModule:
-        candidates = [module for module in genome.modules if signal.type in module.signal_types]
+        effective_type = self._classifier.reclassify(signal)
+        candidates = [module for module in genome.modules if effective_type in module.signal_types]
+        if not candidates:
+            # fall back to original type before giving up
+            candidates = [module for module in genome.modules if signal.type in module.signal_types]
         if not candidates:
             return genome.modules[0]
         disabled = {
             str(rule.get("module_id"))
             for rule in genome.regulatory_rules
-            if rule.get("signal_type") == signal.type and rule.get("enabled") is False
+            if rule.get("signal_type") == effective_type and rule.get("enabled") is False
         }
         candidates = [module for module in candidates if module.module_id not in disabled] or candidates
         return max(
@@ -345,18 +388,35 @@ class Ribosome:
                 payload = {"result": safe_calculate(str(signal.payload["expression"])), "method": "deterministic_calculator"}
             elif module.deterministic_tool == "contract_gateway":
                 payload = {"result": "contract_call_prepared", "contract": signal.payload.get("contract"), "action": signal.payload.get("action")}
+            elif module.execution_strategy == ExecutionStrategy.LLM:
+                payload = self._llm_execute(module, signal)
             else:
                 payload = {"result": f"llm_stub:{signal.payload.get('prompt') or signal.payload}", "method": "llm_stub"}
         except Exception as exc:
             payload = {"error": str(exc)}
+        live = module.execution_strategy == ExecutionStrategy.LLM and "method" in payload and payload.get("method") != "llm_stub"
         return Protein(
             protein_id=new_id("protein"),
             organism_id=signal.organism_id,
             source_signal_id=signal.signal_id,
             type=f"{module.module_id}.result",
             payload=payload,
-            confidence=0.95 if module.execution_strategy != ExecutionStrategy.LLM_STUB else 0.75,
+            confidence=0.95 if module.execution_strategy == ExecutionStrategy.DETERMINISTIC_TOOL else (0.85 if live else 0.75),
         )
+
+    def _llm_execute(self, module: GenomeModule, signal: Signal) -> dict:
+        from preon_systems_cell.llm_providers import get_adapter
+
+        provider = module.llm_provider or "anthropic"
+        model_class = module.llm_model_class or "standard"
+        adapter = get_adapter(str(provider), str(model_class), module.llm_model_id)
+
+        prompt = signal.payload.get("prompt") or str(signal.payload)
+        if adapter is None:
+            return {"result": f"llm_stub:{prompt}", "method": "llm_stub", "provider": str(provider)}
+
+        result = adapter.complete(prompt)
+        return {"result": result, "method": "llm", "provider": str(provider), "model_class": str(model_class)}
 
 
 class ProteinPipeline:
