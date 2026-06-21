@@ -6,7 +6,7 @@ build-backend = "setuptools.build_meta"
 include = ["preon_systems_cell*"]
 
 [tool.setuptools.package-data]
-preon_systems_cell = ["static/*", "static/vendor/*", "storage/sql/*.sql"]
+preon_systems_cell = ["static/*", "static/vendor/*", "storage/sql/*.sql", "bones/defaults.yaml"]
 
 [project]
 name = "preon-systems-cell"

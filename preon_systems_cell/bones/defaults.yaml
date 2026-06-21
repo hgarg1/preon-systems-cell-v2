@@ -1,0 +1,252 @@
+# Default bone contracts and enzyme gene definitions for the Preon Systems organism.
+# Loaded once at OrganismRuntime startup by cortex.load_defaults().
+#
+# Bone contracts define what the organism can do (capability graph).
+# Enzyme genes define how — compiled at startup into frozen callables.
+# The two layers are independent: contracts survive enzyme changes.
+
+bone_contracts:
+
+  - bone_id: math.arithmetic.evaluate
+    capability_family: math
+    capability_path: [math, arithmetic, evaluate]
+    input_schema: {expression: string}
+    output_schema: {result: number}
+    constraints:
+      - expression must be a valid arithmetic expression (+, -, *, /, **, %, parentheses)
+    default_enzyme: enzyme.math.arithmetic.evaluate
+    aliases: [calculator]
+
+  - bone_id: math.geometry.haversine
+    capability_family: math
+    capability_path: [math, geometry, haversine]
+    input_schema: {lat1: number, lon1: number, lat2: number, lon2: number}
+    output_schema: {distance_km: number}
+    constraints:
+      - lat1 and lat2 must be in [-90, 90]
+      - lon1 and lon2 must be in [-180, 180]
+    default_enzyme: enzyme.math.geometry.haversine
+
+  - bone_id: math.encoding.base_convert
+    capability_family: math
+    capability_path: [math, encoding, base_convert]
+    input_schema: {value: string, from_base: integer, to_base: integer}
+    output_schema: {result: string}
+    constraints:
+      - from_base and to_base must be between 2 and 36
+      - value must be a valid number in from_base
+    default_enzyme: enzyme.math.encoding.base_convert
+
+  - bone_id: health.bmi.calculate
+    capability_family: health
+    capability_path: [health, bmi, calculate]
+    input_schema: {weight_kg: number, height_m: number}
+    output_schema: {bmi: number}
+    constraints:
+      - weight_kg must be > 0
+      - height_m must be > 0
+    default_enzyme: enzyme.health.bmi.calculate
+
+  - bone_id: finance.investment.compound_interest
+    capability_family: finance
+    capability_path: [finance, investment, compound_interest]
+    input_schema: {principal: number, annual_rate: number, periods_per_year: number, years: number}
+    output_schema: {future_value: number}
+    constraints:
+      - principal must be > 0
+      - annual_rate must be >= 0 (as decimal, e.g. 0.05 for 5%)
+      - periods_per_year must be >= 1
+      - years must be >= 0
+    default_enzyme: enzyme.finance.investment.compound_interest
+
+  - bone_id: finance.loan.calculate
+    capability_family: finance
+    capability_path: [finance, loan, calculate]
+    input_schema: {principal: number, annual_rate: number, term_years: number}
+    output_schema: {monthly_payment: number}
+    constraints:
+      - principal must be > 0
+      - annual_rate must be > 0 (as decimal, e.g. 0.06 for 6%)
+      - term_years must be > 0
+    default_enzyme: enzyme.finance.loan.calculate
+
+  - bone_id: chemistry.periodic_table.lookup
+    capability_family: chemistry
+    capability_path: [chemistry, periodic_table, lookup]
+    input_schema: {element: string}
+    output_schema: {symbol: string, name: string, atomic_number: integer, atomic_mass: number, group: integer, period: integer}
+    constraints:
+      - element can be symbol (e.g. Fe), name (e.g. Iron), or atomic number as string (e.g. 26)
+    default_enzyme: enzyme.chemistry.periodic_table.lookup
+
+  - bone_id: computing.network.ip_subnet
+    capability_family: computing
+    capability_path: [computing, network, ip_subnet]
+    input_schema: {cidr: string}
+    output_schema: {network: string, broadcast: string, mask: string, first_host: string, last_host: string, host_count: integer}
+    constraints:
+      - cidr must be a valid IPv4 CIDR notation (e.g. 192.168.1.0/24)
+    default_enzyme: enzyme.computing.network.ip_subnet
+
+  - bone_id: computing.http_status.lookup
+    capability_family: computing
+    capability_path: [computing, http_status, lookup]
+    input_schema: {code: integer}
+    output_schema: {meaning: string, category: string, code: integer}
+    constraints:
+      - code must be a valid HTTP status code (100–599)
+    default_enzyme: enzyme.computing.http_status.lookup
+
+  - bone_id: calendar.date.diff
+    capability_family: calendar
+    capability_path: [calendar, date, diff]
+    input_schema: {date_a: string, date_b: string}
+    output_schema: {days: integer}
+    constraints:
+      - date_a and date_b must be ISO 8601 date strings (YYYY-MM-DD)
+      - "result is signed: positive when date_b is after date_a"
+    default_enzyme: enzyme.calendar.date.diff
+
+  - bone_id: calendar.date.timestamp_convert
+    capability_family: calendar
+    capability_path: [calendar, date, timestamp_convert]
+    input_schema: {value: string}
+    output_schema: {epoch: integer, iso: string}
+    constraints:
+      - value can be a Unix epoch (integer as string) or ISO 8601 datetime string
+    default_enzyme: enzyme.calendar.date.timestamp_convert
+
+  - bone_id: text.encoding.morse_code
+    capability_family: text
+    capability_path: [text, encoding, morse_code]
+    input_schema: {text: string, direction: string}
+    output_schema: {result: string}
+    constraints:
+      - direction must be 'encode' or 'decode'
+    default_enzyme: enzyme.text.encoding.morse_code
+
+  - bone_id: text.validation.luhn_check
+    capability_family: text
+    capability_path: [text, validation, luhn_check]
+    input_schema: {card_number: string}
+    output_schema: {valid: boolean}
+    constraints:
+      - card_number may contain digits, spaces, and hyphens
+    default_enzyme: enzyme.text.validation.luhn_check
+
+  - bone_id: contract.gateway
+    capability_family: contract
+    capability_path: [contract, gateway]
+    input_schema: {contract: string, action: string}
+    output_schema: {result: string, contract: string, action: string}
+    constraints: []
+    default_enzyme: enzyme.contract.gateway
+    aliases: [contract_gateway]
+
+
+enzymes:
+
+  - enzyme_id: enzyme.math.arithmetic.evaluate
+    kind: dynamic_expression
+    input_schema: {expression: string}
+    output_key: result
+
+  - enzyme_id: enzyme.math.geometry.haversine
+    kind: composition
+    input_schema: {lat1: number, lon1: number, lat2: number, lon2: number}
+    output_key: distance_km
+    steps:
+      - output: phi1
+        expression: "math.radians(lat1)"
+      - output: phi2
+        expression: "math.radians(lat2)"
+      - output: dphi
+        expression: "math.radians(lat2 - lat1)"
+      - output: dlambda
+        expression: "math.radians(lon2 - lon1)"
+      - output: a
+        expression: "math.sin(dphi / 2) ** 2 + math.cos(phi1) * math.cos(phi2) * math.sin(dlambda / 2) ** 2"
+      - output: distance_km
+        expression: "6371.0 * 2.0 * math.asin(math.sqrt(a))"
+
+  - enzyme_id: enzyme.math.encoding.base_convert
+    kind: python_ref
+    input_schema: {value: string, from_base: integer, to_base: integer}
+    output_key: result
+    ref: "preon_systems_cell.bones.data.base_convert:convert"
+
+  - enzyme_id: enzyme.health.bmi.calculate
+    kind: expression
+    input_schema: {weight_kg: number, height_m: number}
+    output_key: bmi
+    expression: "weight_kg / height_m ** 2"
+
+  - enzyme_id: enzyme.finance.investment.compound_interest
+    kind: composition
+    input_schema: {principal: number, annual_rate: number, periods_per_year: number, years: number}
+    output_key: future_value
+    steps:
+      - output: rate_per_period
+        expression: "annual_rate / periods_per_year"
+      - output: future_value
+        expression: "principal * (1 + rate_per_period) ** (periods_per_year * years)"
+
+  - enzyme_id: enzyme.finance.loan.calculate
+    kind: composition
+    input_schema: {principal: number, annual_rate: number, term_years: number}
+    output_key: monthly_payment
+    steps:
+      - output: monthly_rate
+        expression: "annual_rate / 12"
+      - output: num_payments
+        expression: "term_years * 12"
+      - output: monthly_payment
+        expression: "principal * (monthly_rate * (1 + monthly_rate) ** num_payments) / ((1 + monthly_rate) ** num_payments - 1)"
+
+  - enzyme_id: enzyme.chemistry.periodic_table.lookup
+    kind: python_ref
+    input_schema: {element: string}
+    output_key: element_data
+    ref: "preon_systems_cell.bones.data.periodic_table:lookup"
+
+  - enzyme_id: enzyme.computing.network.ip_subnet
+    kind: python_ref
+    input_schema: {cidr: string}
+    output_key: subnet_info
+    ref: "preon_systems_cell.bones.data.ip_subnet:calculate"
+
+  - enzyme_id: enzyme.computing.http_status.lookup
+    kind: python_ref
+    input_schema: {code: integer}
+    output_key: status_info
+    ref: "preon_systems_cell.bones.data.http_status:lookup"
+
+  - enzyme_id: enzyme.calendar.date.diff
+    kind: python_ref
+    input_schema: {date_a: string, date_b: string}
+    output_key: diff_info
+    ref: "preon_systems_cell.bones.data.dates:diff"
+
+  - enzyme_id: enzyme.calendar.date.timestamp_convert
+    kind: python_ref
+    input_schema: {value: string}
+    output_key: timestamp_info
+    ref: "preon_systems_cell.bones.data.dates:convert_timestamp"
+
+  - enzyme_id: enzyme.text.encoding.morse_code
+    kind: python_ref
+    input_schema: {text: string, direction: string}
+    output_key: result
+    ref: "preon_systems_cell.bones.data.morse_code:translate"
+
+  - enzyme_id: enzyme.text.validation.luhn_check
+    kind: python_ref
+    input_schema: {card_number: string}
+    output_key: valid
+    ref: "preon_systems_cell.bones.data.luhn:check"
+
+  - enzyme_id: enzyme.contract.gateway
+    kind: python_ref
+    input_schema: {contract: string, action: string}
+    output_key: result
+    ref: "preon_systems_cell.bones.data.contract_gateway:handle"

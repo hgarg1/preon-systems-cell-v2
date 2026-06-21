@@ -1,3 +1,5 @@
+import re
+
 from fastapi.testclient import TestClient
 import pytest
 
@@ -5,9 +7,30 @@ from preon_systems_cell.api import RUNTIME
 from preon_systems_cell.auth import _attempts
 from preon_systems_cell.web import app
 
+_SESSION_RE = re.compile(r"preon_session=([^;]+)")
+
 
 client = TestClient(app)
 PASSWORD = "Correct-Horse-Battery-42!"
+
+
+def _auth_login(email: str, password: str, tc: TestClient | None = None) -> None:
+    """Sign up or login and store the session cookie on the given client.
+
+    httpx drops Set-Cookie values whose Domain doesn't match the request host. When
+    PREON_COOKIE_DOMAIN=localhost is set the cookie has Domain=localhost but requests
+    go to "testserver", so r.cookies is empty. We parse the token directly from the
+    raw Set-Cookie header and re-register it without a domain restriction.
+    """
+    tc = tc or client
+    r = tc.post("/auth/signup", json={"email": email, "password": password})
+    assert r.status_code in {200, 409}
+    if r.status_code == 409:
+        r = tc.post("/auth/login", json={"email": email, "password": password})
+        assert r.status_code == 200
+    m = _SESSION_RE.search(r.headers.get("set-cookie", ""))
+    if m:
+        tc.cookies.set("preon_session", m.group(1))
 
 
 @pytest.fixture(autouse=True)
@@ -43,10 +66,7 @@ def reset_runtime_and_auth():
     RUNTIME.stores.actor_counts.clear()
     _attempts.clear()
     client.cookies.clear()
-    response = client.post("/auth/signup", json={"email": "primary@example.com", "password": PASSWORD})
-    assert response.status_code in {200, 409}
-    if response.status_code == 409:
-        assert client.post("/auth/login", json={"email": "primary@example.com", "password": PASSWORD}).status_code == 200
+    _auth_login("primary@example.com", PASSWORD)
 
 
 def test_health_reports_organism_runtime():
@@ -91,7 +111,7 @@ def test_contract_flow_and_auth_boundary():
     blocked_deprecation = client.post(f"/api/contracts/{contract.json()['contract']['contract_id']}/deprecate")
 
     other = TestClient(app)
-    assert other.post("/auth/signup", json={"email": "other@example.com", "password": PASSWORD}).status_code == 200
+    _auth_login("other@example.com", PASSWORD, other)
     forbidden_detail = other.get(f"/api/organisms/{organism_id}")
 
     assert signal.status_code == 200

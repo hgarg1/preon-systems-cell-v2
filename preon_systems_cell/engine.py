@@ -4,8 +4,14 @@ import ast
 from copy import deepcopy
 import operator
 import re
+import time
 from dataclasses import dataclass, field
+from typing import TYPE_CHECKING
 from uuid import uuid4
+
+if TYPE_CHECKING:
+    from preon_systems_cell.bones.cortex import BoneCortex
+    from preon_systems_cell.model_routing.cell_router import CellModelRouter
 
 from preon_systems_cell.models import (
     BoneStructureRecord,
@@ -380,14 +386,16 @@ class Skeleton:
 
 
 class Ribosome:
+    def __init__(self, bone_cortex: "BoneCortex", model_router: "CellModelRouter | None" = None) -> None:
+        self._cortex = bone_cortex
+        self._router = model_router
+
     def execute(self, module: GenomeModule, signal: Signal) -> Protein:
         try:
             if module.execution_strategy == ExecutionStrategy.PRECOMPUTED:
                 payload = {"result": "pong"} if signal.payload.get("message") == "ping" else {"result": signal.payload}
-            elif module.deterministic_tool == "calculator":
-                payload = {"result": safe_calculate(str(signal.payload["expression"])), "method": "deterministic_calculator"}
-            elif module.deterministic_tool == "contract_gateway":
-                payload = {"result": "contract_call_prepared", "contract": signal.payload.get("contract"), "action": signal.payload.get("action")}
+            elif module.execution_strategy == ExecutionStrategy.DETERMINISTIC_TOOL:
+                payload = self._cortex.execute(module.deterministic_tool or "", signal.payload)
             elif module.execution_strategy == ExecutionStrategy.LLM:
                 payload = self._llm_execute(module, signal)
             else:
@@ -406,17 +414,131 @@ class Ribosome:
 
     def _llm_execute(self, module: GenomeModule, signal: Signal) -> dict:
         from preon_systems_cell.llm_providers import get_adapter
-
-        provider = module.llm_provider or "anthropic"
-        model_class = module.llm_model_class or "standard"
-        adapter = get_adapter(str(provider), str(model_class), module.llm_model_id)
+        from preon_systems_cell.model_routing.telemetry import ModelExecutionTelemetry, log_execution
+        from preon_systems_cell.model_routing.types import LlmProteinInstantiationRequest
 
         prompt = signal.payload.get("prompt") or str(signal.payload)
-        if adapter is None:
-            return {"result": f"llm_stub:{prompt}", "method": "llm_stub", "provider": str(provider)}
 
-        result = adapter.complete(prompt)
-        return {"result": result, "method": "llm", "provider": str(provider), "model_class": str(model_class)}
+        # Determine allowed providers: explicit field takes priority, then llm_provider as hint
+        allowed_providers = list(module.allowed_providers)
+        if not allowed_providers and module.llm_provider:
+            allowed_providers = [str(module.llm_provider)]
+
+        # Resolve routing
+        if module.model_routing_policy == "explicit_override" and module.llm_provider:
+            provider = str(module.llm_provider)
+            model_class = str(module.llm_model_class or "standard")
+            model_id = module.llm_model_id
+            fallback_chain: list[tuple[str, str, str | None]] = list(module.llm_fallback_chain)
+            routing_confidence = 1.0
+            routing_resolved_at = "cell"
+            routing_reason = "Explicit genome override"
+            consensus_path: list[str] = ["cell:explicit_override"]
+        elif self._router is not None:
+            request = LlmProteinInstantiationRequest(
+                signal_id=signal.signal_id,
+                task_id=signal.signal_id,
+                module_id=module.module_id,
+                protein_type=module.protein_type or "reasoning",
+                capability_required=module.signal_types[0] if module.signal_types else "query",
+                reasoning_depth=module.min_reasoning_depth or "moderate",
+                cost_tier=module.max_cost_tier or "balanced",
+                data_class=module.data_class_allowed[0] if module.data_class_allowed else "internal",
+                latency_budget_ms=module.latency_budget_ms or 5000,
+                token_budget=module.token_budget or 4096,
+                context_size_estimate=len(str(signal.payload)),
+                allowed_providers=allowed_providers,
+            )
+            decision = self._router.resolve(request)
+            provider = decision.selected_provider
+            model_class = decision.selected_model_class
+            model_id = decision.selected_model_id
+            fallback_chain = list(decision.fallback_chain)
+            routing_confidence = decision.confidence
+            routing_resolved_at = decision.resolved_at
+            routing_reason = decision.routing_reason
+            consensus_path = list(decision.consensus_path)
+        else:
+            # Legacy path — no router wired (shouldn't happen in normal runtime)
+            provider = str(module.llm_provider or "anthropic")
+            model_class = str(module.llm_model_class or "standard")
+            model_id = module.llm_model_id
+            fallback_chain = list(module.llm_fallback_chain)
+            routing_confidence = 0.5
+            routing_resolved_at = "cell"
+            routing_reason = "Legacy static routing (no router)"
+            consensus_path = []
+
+        token_budget = module.token_budget or 4096
+
+        # Try primary provider, then walk fallback chain
+        t0 = time.monotonic()
+        fallback_used = False
+        actual_provider = provider
+        actual_model_class = model_class
+        actual_model_id = model_id
+
+        adapter = get_adapter(provider, model_class, model_id) if provider != "stub" else None
+        if adapter is None:
+            for fb_provider, fb_model_class, fb_model_id in fallback_chain:
+                if fb_provider == "stub":
+                    break
+                adapter = get_adapter(fb_provider, fb_model_class, fb_model_id)
+                if adapter is not None:
+                    actual_provider = fb_provider
+                    actual_model_class = fb_model_class
+                    actual_model_id = fb_model_id
+                    fallback_used = True
+                    break
+
+        if adapter is None:
+            log_execution(ModelExecutionTelemetry(
+                provider=actual_provider,
+                model_class=actual_model_class,
+                model_id=actual_model_id,
+                latency_ms=int((time.monotonic() - t0) * 1000),
+                input_tokens=0, output_tokens=0,
+                schema_valid=True, repair_required=False,
+                fallback_used=fallback_used,
+                failure_type="no_adapter",
+            ))
+            return {
+                "result": f"llm_stub:{prompt}",
+                "method": "llm_stub",
+                "provider": "stub",
+                "model_class": "stub",
+                "model_id": None,
+                "routing_confidence": routing_confidence,
+                "routing_resolved_at": routing_resolved_at,
+                "routing_reason": f"{routing_reason} [no adapter for {provider}]",
+                "consensus_path": consensus_path,
+            }
+
+        result = adapter.complete(prompt, max_tokens=token_budget)
+        latency_ms = int((time.monotonic() - t0) * 1000)
+
+        log_execution(ModelExecutionTelemetry(
+            provider=actual_provider,
+            model_class=actual_model_class,
+            model_id=actual_model_id,
+            latency_ms=latency_ms,
+            input_tokens=len(prompt.split()),
+            output_tokens=len(result.split()),
+            schema_valid=True, repair_required=False,
+            fallback_used=fallback_used,
+        ))
+
+        return {
+            "result": result,
+            "method": "llm",
+            "provider": actual_provider,
+            "model_class": actual_model_class,
+            "model_id": actual_model_id,
+            "routing_confidence": routing_confidence,
+            "routing_resolved_at": routing_resolved_at,
+            "routing_reason": routing_reason,
+            "consensus_path": consensus_path,
+        }
 
 
 class ProteinPipeline:
@@ -479,12 +601,18 @@ class OrganismRuntime:
         self._bind_services()
 
     def _bind_services(self) -> None:
+        from preon_systems_cell.bones.cortex import Osteoclast, Osteocyte, load_defaults
+        from preon_systems_cell.model_routing.cell_router import CellModelRouter
+        self.bone_cortex = load_defaults()
+        self.osteocyte = Osteocyte()
+        self.osteoclast = Osteoclast()
+        self.model_router = CellModelRouter()
         self.membrane = Membrane(self.stores)
         self.cytoplasm = Cytoplasm(self.stores)
         self.nucleus = Nucleus()
         self.mitochondria = Mitochondria(self.stores)
         self.skeleton = Skeleton(self.stores)
-        self.ribosome = Ribosome()
+        self.ribosome = Ribosome(self.bone_cortex, self.model_router)
         self.protein_pipeline = ProteinPipeline()
 
     def create_organism(self, organism: OrganismRecord) -> OrganismRecord:
@@ -1544,6 +1672,16 @@ class OrganismRuntime:
             protein = self.protein_pipeline.validate(contract_error, signal)
         else:
             protein = self.ribosome.execute(module, signal)
+            routing_values: dict[str, object] = {}
+            if module.execution_strategy == ExecutionStrategy.LLM:
+                routing_values = {
+                    "routing_provider": protein.payload.get("provider"),
+                    "routing_model_class": protein.payload.get("model_class"),
+                    "routing_model_id": protein.payload.get("model_id"),
+                    "routing_confidence": protein.payload.get("routing_confidence"),
+                    "routing_resolved_at": protein.payload.get("routing_resolved_at"),
+                    "routing_reason": protein.payload.get("routing_reason"),
+                }
             events.append(
                 runtime_event(
                     RuntimeEventType.RIBOSOME,
@@ -1554,8 +1692,24 @@ class OrganismRuntime:
                     protein_id=protein.protein_id,
                     strategy=module.execution_strategy.value,
                     deterministic_tool=module.deterministic_tool,
+                    **routing_values,
                 )
             )
+            if module.execution_strategy == ExecutionStrategy.DETERMINISTIC_TOOL and module.deterministic_tool:
+                bone_id = module.deterministic_tool
+                success = "error" not in protein.payload
+                self.osteocyte.record_execution(bone_id, success=success)
+                events.append(
+                    runtime_event(
+                        RuntimeEventType.BONE,
+                        "Osteocyte recorded bone execution",
+                        organism_id=signal.organism_id,
+                        cell_id=cell.cell_id,
+                        signal_id=signal.signal_id,
+                        bone_id=bone_id,
+                        success=success,
+                    )
+                )
             protein = self.protein_pipeline.validate(protein, signal)
         events.extend(self._protein_events(signal, cell, protein, module))
         self.stores.proteins.setdefault(signal.organism_id, []).append(protein)

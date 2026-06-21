@@ -173,10 +173,21 @@ class GenomeModule(BaseConfigModel):
     signal_types: list[str] = Field(default_factory=list)
     execution_strategy: ExecutionStrategy = ExecutionStrategy.LLM_STUB
     deterministic_tool: str | None = None
-    # LLM routing — only used when execution_strategy == LLM
+    # LLM routing — static override fields (used when model_routing_policy="explicit_override"
+    # or as a provider hint when model_routing_policy="emergent_local_first")
     llm_provider: LlmProvider | None = None
     llm_model_class: ModelClass | None = ModelClass.STANDARD
     llm_model_id: str | None = None   # overrides model_class when set
+    # Phase 2: model routing constraints exposed to CellModelRouter
+    protein_type: str | None = None        # reasoning|retrieval|transformation|aggregation|evaluation
+    allowed_providers: list[str] = Field(default_factory=list)    # empty = all registered
+    min_reasoning_depth: str | None = None  # shallow|moderate|deep
+    max_cost_tier: str | None = None        # cheap|balanced|premium
+    data_class_allowed: list[str] = Field(default_factory=list)   # public|internal|confidential|restricted
+    model_routing_policy: str = "emergent_local_first"  # emergent_local_first|explicit_override|organism_required
+    token_budget: int | None = None
+    latency_budget_ms: int | None = None
+    llm_fallback_chain: list[tuple[str, str, str | None]] = Field(default_factory=list)
 
 
 class DivisionLoadGate(BaseConfigModel):
@@ -356,8 +367,17 @@ class LlmProtein(BaseConfigModel):
     organism_id: str = Field(min_length=1)
     source_signal_id: str = Field(min_length=1)
     gene_id: str = Field(min_length=1)
+    # Routing fields — resolved by CellModelRouter before instantiation
     provider: str = Field(min_length=1)
     model_class: str = Field(min_length=1)
+    model_id: str | None = None
+    token_budget: int = 4096
+    latency_budget_ms: int = 5000
+    fallback_chain: list[tuple[str, str, str | None]] = Field(default_factory=list)
+    routing_confidence: float = 0.0
+    routing_resolved_at: str = "cell"
+    routing_consensus_path: list[str] = Field(default_factory=list)
+    routing_reason: str = ""
     raw_answer: Any | None = None
     consumed: bool = False
     created_at: datetime = Field(default_factory=utc_now)
@@ -397,6 +417,7 @@ class AnswerProtein(BaseModel):
     source_provider: str
     confidence: float | None = Field(default=None, ge=0.0, le=1.0)
     destination: ProteinDestination
+    routing_trace: dict[str, Any] = Field(default_factory=dict)
     metadata: dict[str, Any] = Field(default_factory=dict)
 
     def route_key(self) -> str:
@@ -668,7 +689,7 @@ class BoneStructureRecord(BaseConfigModel):
     bone_id: str = Field(min_length=1)
     owner_user_id: str | None = None
     name: str = Field(min_length=1)
-    structure_type: Literal["schema", "adapter", "capability", "contract"] = "schema"
+    structure_type: Literal["schema", "adapter", "capability", "contract", "bone_contract", "enzyme"] = "schema"
     definition: dict[str, Any] = Field(default_factory=dict)
     status: RecordStatus = RecordStatus.ACTIVE
     created_at: datetime = Field(default_factory=utc_now)
@@ -680,7 +701,7 @@ class StructureProposal(BaseConfigModel):
     owner_user_id: str | None = None
     requested_by: str | None = None
     name: str = Field(min_length=1)
-    structure_type: Literal["schema", "adapter", "capability", "contract"] = "schema"
+    structure_type: Literal["schema", "adapter", "capability", "contract", "bone_contract", "enzyme"] = "schema"
     definition: dict[str, Any] = Field(default_factory=dict)
     status: Literal["pending", "approved", "rejected"] = "pending"
     decision_reason: str | None = None

@@ -44,84 +44,485 @@ Based on gap analysis against current codebase (~20-25% complete) and the LLM Pr
 
 ---
 
-## Phase 1 — Bones Library
+## Phase 1 — Skeletal Capability Framework
 **Sources:** `bones-and-llm-routing.md` + §4 (Protein Types)  
 **Effort:** M  
 **Dependency:** None — fully isolated, can start immediately
 
-### What to build
-A tool registry and ~15-20 deterministic bones implemented as pure functions.
+### Design principle
 
-**Tool Registry:**
-- `tools/registry.py` — maps tool name → callable, self-documenting (input/output schema)
-- `GenomeModule.deterministic_tool` already references by name; registry makes it pluggable
-- Each tool: `def execute(payload: dict) -> dict` — no I/O, no network, deterministic
+Bones are not tools. Bones are structural capability contracts.
 
-**Priority bones to implement first:**
+A bone defines what the organism *can do* — its input shape, output shape, constraints, and position in the capability graph. A bone never defines *how* to do it. Execution is the responsibility of **Enzymes**: reusable, compiled primitives that satisfy bone contracts at runtime.
 
-| Tool | Input | Output | Complexity |
-|---|---|---|---|
-| `calculator` | `expression: str` | `result: float` | Already done |
-| `unit_converter` | `value, from_unit, to_unit` | `result, unit` | S |
-| `base_converter` | `value: str, from_base, to_base` | `result: str` | S |
-| `date_diff` | `date_a, date_b` | `days: int, business_days: int` | S |
-| `timestamp_converter` | `epoch` or `iso_string` | both forms | S |
-| `z_table_lookup` | `z_score: float` | `p_value: float` | S (lookup table) |
-| `periodic_table` | `element: str or int` | symbol, mass, group, period, etc. | S (data file) |
-| `ip_subnet` | `cidr: str` | network, broadcast, host_range, mask | S |
-| `haversine` | `lat1, lon1, lat2, lon2` | `distance_km: float` | S |
-| `country_lookup` | `code: str` | name, alpha2, alpha3, calling_code | S (data file) |
-| `http_status` | `code: int` | meaning, category | S (lookup) |
-| `compound_interest` | `pv, rate, n, t` | `fv: float` | S |
-| `bmi` | `weight_kg, height_m` | `bmi, category` | S |
-| `morse_code` | `text: str, direction` | encoded or decoded | S |
-| `luhn_check` | `card_number: str` | `valid: bool` | S |
-| `molecular_weight` | `formula: str` | `weight_g_mol: float` | M (formula parser) |
-
-**Cadence:**
-- Week 1: registry + 8 simple bones
-- Week 2: 6 data-file bones (periodic table, country lookup) + integration tests
-
-**After this phase:** genome can reference any tool by name; adding a new bone is a 30-minute task.
+This separation means:
+- A bone contract is stable even when execution changes (formula today → table lookup tomorrow → LLM protein if inputs fall outside constraints)
+- New capabilities can be expressed as bone contracts without writing execution code — the cell assembles existing enzymes dynamically
+- The skeleton grows through Osteoblast promotion, not genome edits
 
 ---
 
-## Phase 2 — Model Interface Layer
-**Sources:** §5 (Model Interface Layer)  
+### Layer 1 — Bone Contracts
+
+Each bone is a pure capability contract stored in `BoneStructureRecord.definition` with a richer schema:
+
+```python
+BoneContract(
+    bone_id="math.arithmetic.evaluate",
+    capability_family="math",                    # top of capability graph
+    capability_path=["math", "arithmetic", "evaluate"],
+    input_schema={"expression": "string"},
+    output_schema={"result": "number"},
+    constraints=["expression must be a valid arithmetic expression"],
+    default_enzyme="enzyme.expression_eval",     # optional default binding
+)
+```
+
+Bones form a **capability graph** — a hierarchical tree of what the organism can structurally become:
+
+```
+math
+├── arithmetic.evaluate
+├── statistics.z_table
+├── statistics.binomial
+└── geometry.haversine
+
+finance
+├── loan.calculate
+├── investment.compound_interest
+└── investment.npv
+
+chemistry
+├── periodic_table.lookup
+└── molecular_weight.calculate
+
+computing
+├── network.ip_subnet
+└── encoding.base_convert
+
+health
+├── bmi.calculate
+└── egfr.calculate
+
+calendar
+├── date.diff
+└── date.timestamp_convert
+```
+
+The Nucleus traverses this graph to find the matching bone contract for an incoming signal. No tool names. No `if/elif`. The signal type IS the path into the graph.
+
+**`structure_type`** on `BoneStructureRecord` gains a new value: `"capability"` (alongside existing `schema`, `adapter`, `contract`).
+
+---
+
+### Layer 2 — Enzymes
+
+Enzymes are compiled execution primitives. They do not appear in the capability graph. They satisfy bone contracts when the cell requests execution.
+
+Three enzyme kinds, in order of emergence:
+
+**`expression`** — a safe math formula compiled from a gene definition in the genome. No Python required for new enzymes of this kind:
+```yaml
+enzyme_id: enzyme.expression_eval
+kind: expression
+expression: "{{ payload.expression }}"   # evaluates the input expression itself
+output_key: result
+```
+
+**`composition`** — a named pipeline of expression steps, each consuming outputs of prior steps. Derives new enzymes from existing ones:
+```yaml
+enzyme_id: enzyme.finance.compound_interest
+kind: composition
+steps:
+  - output: rate_per_period
+    expression: "annual_rate / periods_per_year"
+  - output: result
+    expression: "principal * (1 + rate_per_period) ** (periods_per_year * years)"
+output_key: result
+```
+
+**`python_ref`** — escape hatch for enzymes that cannot be expressed as formulas (lookup tables, formula parsers). Points to a pure function in `preon_systems_cell/bones/data/`:
+```yaml
+enzyme_id: enzyme.chemistry.periodic_table
+kind: python_ref
+ref: "preon_systems_cell.bones.data.periodic_table:lookup"
+output_key: element_data
+```
+
+Only ~4 of the standard enzymes need `python_ref`. Everything else is `expression` or `composition`.
+
+---
+
+### Layer 3 — EnzymeCompiler & BoneCortex
+
+**`EnzymeCompiler`** runs once at organism startup. For each enzyme gene definition:
+- `expression` → parses and validates via AST whitelist (arithmetic ops, `math.*`; blocks attribute access, dunder calls, imports); compiles to a bound callable
+- `composition` → threads step outputs as local variables; compiles the full pipeline
+- `python_ref` → imports and validates the referenced function
+
+Produces a `CompiledEnzyme` — a frozen dataclass wrapping the callable plus its input schema validator.
+
+**`BoneCortex`** holds:
+- All bone contracts (the capability graph)
+- All compiled enzymes
+- The bone → enzyme binding map (default bindings + any runtime overrides)
+
+```python
+class BoneCortex:
+    def resolve(self, bone_id: str) -> BoneContract | None
+    def execute(self, bone_id: str, payload: dict) -> dict        # uses default binding
+    def can_satisfy(self, bone_id: str, payload: dict) -> bool    # schema + constraint check
+    def bind(self, bone_id: str, enzyme_id: str) -> None          # runtime override
+    def graph(self) -> dict                                        # full capability graph
+```
+
+The Ribosome replaces its entire `if/elif` block with:
+```python
+elif module.execution_strategy == ExecutionStrategy.DETERMINISTIC_TOOL:
+    payload = self.bone_cortex.execute(module.deterministic_tool, signal.payload)
+```
+
+---
+
+### Layer 4 — Bone Cell Lifecycle
+
+Three bone cell roles, each with a concrete responsibility:
+
+**Osteoblast** (already partially exists) — creates new bone contracts and enzyme bindings:
+- Proposes `BoneContract` definitions through the existing proposal API
+- Proposes new enzyme gene definitions
+- Promotes a successful dynamic assembly to a permanent default enzyme binding (the seed of crystallization)
+
+**Osteocyte** (new) — monitors skeletal health:
+- Tracks usage frequency per bone contract
+- Detects constraint drift (payloads arriving that fall outside declared constraints)
+- Reports bottlenecks (bone contracts with no satisfying enzyme → forced LLM fallback)
+- Emits `RuntimeEventType.BONE` telemetry per execution
+
+**Osteoclast** (new) — removes obsolete structure:
+- Deprecates bone contracts with zero usage over a configurable window
+- Removes enzyme bindings that have been superseded
+- Simplifies the capability graph when derivation paths collapse
+
+Osteocyte and Osteoclast are lightweight at this phase — stubbed monitoring hooks that emit events, with full logic deferred to Phase 12 (Observability).
+
+---
+
+### Crystallization (future — not Phase 1)
+
+When a cell repeatedly assembles enzymes dynamically to satisfy a bone contract and succeeds at high rate, the Osteoblast can promote that assembly to a permanent default enzyme binding — the equivalent of stress-induced bone mineralization. The organism gradually earns stronger skeletal structure through use, not through upfront design.
+
+This is intentionally deferred. Phase 1 establishes the substrate for it. Crystallization becomes meaningful once Phase 4 (intra-cell coordination) and Phase 12 (observability) are in place.
+
+---
+
+### Default bone contracts & enzyme bindings shipped in Phase 1
+
+These are defined as data (YAML gene definitions), not Python tools:
+
+| Bone ID | Enzyme kind | Note |
+|---|---|---|
+| `math.arithmetic.evaluate` | `expression` | replaces hardcoded calculator |
+| `math.statistics.z_table` | `python_ref` | lookup table |
+| `math.geometry.haversine` | `expression` | great-circle distance |
+| `math.encoding.base_convert` | `expression` | base N to base M |
+| `finance.loan.calculate` | `composition` | monthly payment |
+| `finance.investment.compound_interest` | `composition` | FV from PV + rate + time |
+| `finance.health.bmi` | `expression` | weight / height² |
+| `chemistry.periodic_table.lookup` | `python_ref` | data file |
+| `chemistry.molecular_weight.calculate` | `python_ref` | formula parser |
+| `computing.network.ip_subnet` | `composition` | CIDR → network/broadcast/range |
+| `computing.encoding.base64` | `expression` | pure transform |
+| `computing.http_status.lookup` | `python_ref` | lookup table |
+| `calendar.date.diff` | `expression` | signed day count |
+| `calendar.date.timestamp_convert` | `expression` | epoch ↔ ISO |
+| `text.encoding.morse_code` | `python_ref` | character ↔ dots/dashes |
+| `text.validation.luhn_check` | `expression` | credit card checksum |
+
+---
+
+### New files
+
+| File | What |
+|---|---|
+| `preon_systems_cell/bones/__init__.py` | Package |
+| `preon_systems_cell/bones/models.py` | `BoneContract`, `EnzymeGene`, `CompiledEnzyme` Pydantic models |
+| `preon_systems_cell/bones/compiler.py` | `EnzymeCompiler` with safe AST evaluator |
+| `preon_systems_cell/bones/cortex.py` | `BoneCortex` — capability graph + enzyme registry + binding map |
+| `preon_systems_cell/bones/defaults.yaml` | Default bone contracts and enzyme gene definitions |
+| `preon_systems_cell/bones/data/periodic_table.py` | Lookup data for `python_ref` enzymes |
+| `preon_systems_cell/bones/data/country_codes.py` | Same |
+| `preon_systems_cell/bones/data/http_status.py` | Same |
+| `preon_systems_cell/bones/data/morse_code.py` | Same |
+
+Changes to existing files:
+- `models.py` — add `BoneContract`, `EnzymeGene` models; extend `BoneStructureRecord.structure_type` to include `"capability"`
+- `engine.py` — add `BoneCortex` to `OrganismRuntime`; wire into `Ribosome`; remove hardcoded `if/elif` tool dispatch; add `Osteocyte` telemetry hooks; add `Osteoclast` stub
+- `bones-and-llm-routing.md` — update to reflect this design
+
+---
+
+### Cadence
+
+- Week 1: `BoneContract` model, `EnzymeGene` model, `EnzymeCompiler` (all three kinds + safe AST), `BoneCortex`, `defaults.yaml` with 8 expression/composition enzymes, wire Ribosome
+- Week 2: 4 `python_ref` data modules (periodic table, country codes, HTTP status, morse), remaining 8 default bones, Osteocyte telemetry stub, Osteoclast stub, integration tests
+
+**After this phase:** the skeleton defines what the organism can become. Adding a new capability is a YAML bone contract + enzyme gene definition — no Python required for expression/composition kinds. The Ribosome never names a tool directly. The capability graph is queryable. Crystallization is possible once observability lands.
+
+---
+
+## Phase 2 — Model Interface Layer & Provider Routing
+**Sources:** §5 (Model Interface Layer) + LLM Protein Model Routing Architecture  
 **Effort:** M  
 **Dependency:** Phase 0 (LLM adapters exist)
 
-### What to build
+### Design principle
 
-**Token budgeting:**
-- `LlmRequest` struct: `prompt, system, max_tokens, budget_tokens, priority`
-- `budget_tokens` = protein-level limit; if prompt + expected output > budget → truncate context or defer
-- Per-invocation token counter fed back into `Protein.payload["token_usage"]`
+Provider and model selection is not a static genome field lookup — it is a routing decision the organism makes locally at the cell level, escalating to tissue → organ → organism only when confidence, policy, or governance requires it.
 
-**N-tier fallback:**
 ```
-primary: (provider="anthropic", model_class="standard")
-  ↓ if timeout or 5xx
-fallback_1: (provider="anthropic", model_class="fast")
-  ↓ if still failing
-fallback_2: (provider="openai", model_class="fast")
-  ↓ if no keys or all fail
-stub: llm_stub
+Ribosome decides that an LLM protein should be expressed.
+Model routing determines which provider/model gives that protein its execution substrate.
 ```
-Defined in `GenomeModule.llm_fallback_chain: list[LlmFallbackEntry]`
 
-**Usage tracking:**
-- Adapter returns `LlmResponse(content, token_usage, latency_ms, provider, model_id)`
-- Ribosome stores these in protein payload
-- RuntimeEvent logs usage per invocation
+The Ribosome does not choose the model. It creates an `LlmProteinInstantiationRequest` and delegates to the routing layer. The protein is born with a provider/model identity already resolved.
 
-**Streaming (optional in this phase):**
-- Add `adapter.stream(prompt) -> AsyncIterator[str]`
-- Only wire to API endpoints that want streaming; internals still work buffered
+At Phase 2, routing is **deterministic policy resolution** — no weighted scoring, no historical telemetry (none exists yet). The weighted scoring formula is deferred to Phase 12 once execution telemetry accumulates and weights can be validated.
 
-**Cadence:**
-- Week 1: LlmRequest struct, token budgeting, usage tracking
-- Week 2: N-tier fallback chain, wire streaming to one API endpoint
+---
+
+### Core Objects
+
+**`LlmProteinInstantiationRequest`** — intent object created by the Ribosome before protein instantiation. Contains only fields that are mechanically derivable from the signal, genome module, and runtime context. Fields requiring a prior LLM call to populate (`ambiguity_level`, `creativity_required`, `factuality_required`, `schema_strictness`) are intentionally excluded — if needed in future they will be set by an Evaluation protein in a cell execution plan (Phase 4).
+
+```python
+@dataclass(frozen=True)
+class LlmProteinInstantiationRequest:
+    signal_id: str
+    task_id: str           # signal_id until Phase 8 TaskGraph exists
+    module_id: str
+
+    protein_type: ProteinType          # from GenomeModule
+    capability_required: str           # from GenomeModule signal_types[0]
+
+    reasoning_depth: ReasoningDepth    # from GenomeModule (shallow/moderate/deep)
+    cost_tier: CostTier                # from GenomeModule (cheap/balanced/premium)
+    data_class: DataClass              # from GenomeModule (public/internal/confidential/restricted)
+
+    latency_budget_ms: int             # from GenomeModule or signal deadline
+    token_budget: int                  # from GenomeModule
+    context_size_estimate: int         # computed from signal payload byte length
+
+    allowed_providers: list[str]       # from GenomeModule; empty = all registered
+    expected_output_schema: dict[str, Any] | None = None  # from GenomeModule
+
+    metadata: dict[str, Any] = field(default_factory=dict)
+```
+
+**`ModelRoutingDecision`** — the routing result, carrying full trace for observability:
+
+```python
+@dataclass(frozen=True)
+class ModelRoutingDecision:
+    selected_provider: str
+    selected_model_class: str
+    selected_model_id: str | None
+
+    confidence: float
+    resolved_at: Literal["cell", "tissue", "organ", "organism"]
+
+    candidates: list[ModelCandidate]
+    consensus_path: list[str]
+    fallback_chain: list[tuple[str, str, str | None]]
+
+    token_budget: int
+    latency_budget_ms: int
+    data_policy: str
+
+    routing_reason: str
+    metadata: dict[str, Any] = field(default_factory=dict)
+```
+
+`ModelRoutingDecision` is `frozen=True`. Routing layers that build on a prior decision use `dataclasses.replace()` — there is no `.with_updates()` method.
+
+**`ProviderModelProfile`** — centralizes provider capability metadata, replacing fields scattered across adapter files:
+
+```python
+@dataclass(frozen=True)
+class ProviderModelProfile:
+    provider: str
+    model_class: str
+    model_id: str
+
+    max_context_tokens: int
+    supports_json_schema: bool
+    supports_tools: bool
+    supports_vision: bool
+    supports_streaming: bool
+
+    average_latency_ms: int
+    relative_cost: float           # 0.0–1.0 relative scale
+
+    strengths: list[str]
+    weaknesses: list[str]
+    allowed_data_classes: list[DataClass]
+```
+
+A `MODEL_REGISTRY: list[ProviderModelProfile]` ships with default entries for Anthropic, OpenAI, Grok, Gemini. Exact model IDs remain configurable via environment.
+
+**`ModelExecutionTelemetry`** — logged after every provider call. Feeds future weighted routing (Phase 12):
+
+```python
+@dataclass
+class ModelExecutionTelemetry:
+    provider: str
+    model_class: str
+    model_id: str
+
+    latency_ms: int
+    input_tokens: int
+    output_tokens: int
+
+    schema_valid: bool
+    repair_required: bool
+    fallback_used: bool
+
+    evaluation_score: float | None
+    cost_estimate: float | None
+    failure_type: str | None
+```
+
+---
+
+### Day-One Routing Policy
+
+`CellModelRouter` implements **deterministic policy resolution**. No weighted scoring — the system starts with one or two active providers and no validated telemetry weights:
+
+1. If `GenomeModule` specifies an explicit provider + model override → use it directly
+2. Else filter `MODEL_REGISTRY` candidates by hard constraints:
+   - provider API key is present in environment
+   - provider is in `allowed_providers` (or list is empty — all pass)
+   - provider's `allowed_data_classes` covers `request.data_class`
+   - model's `max_context_tokens` ≥ `request.context_size_estimate`
+3. Among passing candidates, prefer: lowest `relative_cost` when `cost_tier=cheap`; lowest `average_latency_ms` when `latency_budget_ms` is tight; else use registry order
+4. If no candidate available → walk `fallback_chain` until one succeeds or fall to `llm_stub`
+5. Log `ModelExecutionTelemetry` regardless of outcome
+
+**Not implemented yet:** multi-dimensional weighted scoring (`capability_score * 0.25 + ...`). Deferred to Phase 12 when telemetry history exists to validate weights.
+
+---
+
+### Routing Hierarchy
+
+```
+LlmProteinInstantiationRequest
+  ↓
+CellModelRouter            ← Phase 2: full (Day-One deterministic policy)
+  ↓ always resolves at this phase (policy is deterministic, never uncertain)
+ModelRoutingDecision
+
+TissueModelCouncil         ← Phase 6: stub now, full implementation in Phase 6
+OrganModelPolicy           ← Phase 9: stub now, full implementation in Phase 9
+OrganismRoutingAuthority   ← Phase 9: stub now, full implementation in Phase 9
+```
+
+At Phase 2, `TissueModelCouncil`, `OrganModelPolicy`, and `OrganismRoutingAuthority` are stubs that return `None`. `CellModelRouter` always resolves because Day-One policy is deterministic. Confidence thresholds and escalation rules come online in Phases 6 and 9 when those biological layers have runtime implementations.
+
+---
+
+### Integration Points
+
+**Ribosome** — constructs `LlmProteinInstantiationRequest`, delegates to router, instantiates protein with resolved identity:
+
+```python
+routing_request = LlmProteinInstantiationRequest(
+    signal_id=signal.signal_id,
+    task_id=signal.signal_id,
+    module_id=module.module_id,
+    protein_type=module.protein_type or "reasoning",
+    capability_required=module.signal_types[0],
+    reasoning_depth=module.min_reasoning_depth or "moderate",
+    cost_tier=module.max_cost_tier or "balanced",
+    data_class=module.data_class_allowed[0] if module.data_class_allowed else "internal",
+    latency_budget_ms=module.latency_budget_ms or 5000,
+    token_budget=module.token_budget or 4096,
+    context_size_estimate=len(str(signal.payload)),
+    allowed_providers=module.allowed_providers or [],
+    expected_output_schema=module.output_schema,
+)
+
+decision = self.model_router.resolve(routing_request)
+
+protein = LlmProtein(
+    provider=decision.selected_provider,
+    model_class=decision.selected_model_class,
+    model_id=decision.selected_model_id,
+    token_budget=decision.token_budget,
+    latency_budget_ms=decision.latency_budget_ms,
+    fallback_chain=decision.fallback_chain,
+    routing_confidence=decision.confidence,
+    routing_resolved_at=decision.resolved_at,
+    routing_consensus_path=decision.consensus_path,
+    routing_reason=decision.routing_reason,
+    input_payload=signal.payload,
+)
+```
+
+**`LlmProtein`** gains routing fields: `provider`, `model_class`, `model_id`, `token_budget`, `latency_budget_ms`, `fallback_chain`, `routing_confidence`, `routing_resolved_at`, `routing_consensus_path`, `routing_reason`. The protein does not select its own model — routing is resolved before instantiation.
+
+**`AnswerProtein`** gains `routing_trace: dict` carrying `selected_provider`, `selected_model_id`, `routing_confidence`, `resolved_at`, `consensus_path`, and `fallback_chain`. Visible in protein payload and RuntimeEvent.
+
+**`GenomeModule`** gains new optional fields:
+- `allowed_providers: list[str]` — empty = all registered
+- `min_reasoning_depth: ReasoningDepth | None`
+- `max_cost_tier: CostTier | None`
+- `data_class_allowed: list[DataClass]`
+- `model_routing_policy: Literal["emergent_local_first", "explicit_override", "organism_required"]`
+- `token_budget: int | None`
+- `latency_budget_ms: int | None`
+- `llm_fallback_chain: list[tuple[str, str, str | None]]` — explicit override; if absent, built from registry
+
+---
+
+### New Files
+
+| File | What |
+|---|---|
+| `preon_systems_cell/model_routing/__init__.py` | Package |
+| `preon_systems_cell/model_routing/types.py` | `LlmProteinInstantiationRequest`, `ModelRoutingDecision`, `ModelCandidate`, `ModelExecutionTelemetry`, enums |
+| `preon_systems_cell/model_routing/registry.py` | `ProviderModelProfile`, `MODEL_REGISTRY` with default entries for 4 providers |
+| `preon_systems_cell/model_routing/cell_router.py` | `CellModelRouter` — Day-One deterministic policy |
+| `preon_systems_cell/model_routing/tissue_council.py` | `TissueModelCouncil` — stub returning `None` (Phase 6) |
+| `preon_systems_cell/model_routing/organ_policy.py` | `OrganModelPolicy` — stub returning `None` (Phase 9) |
+| `preon_systems_cell/model_routing/organism_authority.py` | `OrganismRoutingAuthority` — stub returning `None` (Phase 9) |
+| `preon_systems_cell/model_routing/fallback.py` | Fallback chain builder — derives chain from registry by constraint compatibility |
+| `preon_systems_cell/model_routing/telemetry.py` | `ModelExecutionTelemetry` logging and future scoring hook |
+
+Changes to existing files:
+- `models.py` — add new fields to `GenomeModule`; add `routing_trace` to `AnswerProtein`; add `LlmProtein` routing fields
+- `engine.py` — Ribosome delegates to `CellModelRouter`; model interface layer receives full routing decision; telemetry logged after each adapter call
+
+---
+
+### Deferred to Later Phases
+
+| What | When |
+|---|---|
+| `TissueModelCouncil` full implementation | Phase 6 (tissue runtime) |
+| `OrganModelPolicy` full implementation | Phase 9 (organ coordination) |
+| `OrganismRoutingAuthority` full implementation | Phase 9 |
+| Weighted multi-dimensional scoring formula | Phase 12 (needs telemetry history to validate weights) |
+| Confidence thresholds and escalation triggers | Phase 12 |
+| Streaming (`adapter.stream()`) | Phase 14 (frontend surfaces) |
+
+---
+
+### Cadence
+
+- Week 1: `types.py` (all core objects + enums), `registry.py` with 4 provider profiles, `CellModelRouter` Day-One policy, stubs for Tissue/Organ/Organism routers, `fallback.py`
+- Week 2: Wire Ribosome to routing layer, `GenomeModule` new fields, `ModelExecutionTelemetry` logging, `AnswerProtein` routing trace, update `LlmProtein`, integration tests
+
+**After this phase:** every LLM call has a resolved provider/model identity before invocation, a full routing trace in the protein, a tested fallback chain, and execution telemetry being logged. The routing hierarchy stubs are in place for Phase 6 and Phase 9 to fill in.
 
 ---
 
@@ -613,8 +1014,8 @@ class ResilienceMode(StrEnum):
 ```
 NOW                                                                    18 MONTHS+
 │                                                                              │
-├─P1──────┤  Bones Library                     M   · 2 weeks
-├─P2──────┤  Model Interface Layer             M   · 2 weeks
+├─P1──────┤  Skeletal Capability Framework      M   · 2 weeks
+├─P2──────┤  Model Interface Layer & Provider Routing  M   · 2 weeks
 ├─P3────────┤  5 Protein Types                 M   · 2 weeks
 ├─P4──────────────┤  Intra-Cell Coordination   L   · 3 weeks
 ├─P5────────────────────┤  Layered Memory       L   · 3 weeks
@@ -631,8 +1032,8 @@ NOW                                                                    18 MONTHS
 
 | Phase | What | Effort | Unlock |
 |---|---|---|---|
-| P1 | Bones Library | M | Rich deterministic tools for any genome |
-| P2 | Model Interface Layer | M | Token budgets, n-tier fallback, usage tracking |
+| P1 | Skeletal Capability Framework | M | Bone contracts + enzyme compilation + BoneCortex; capability graph; Ribosome no longer names tools directly |
+| P2 | Model Interface Layer & Provider Routing | M | `LlmProteinInstantiationRequest`, `ModelRoutingDecision`, `ProviderModelProfile` registry, `CellModelRouter` (Day-One deterministic policy), routing trace in `AnswerProtein`, `ModelExecutionTelemetry`; Tissue/Organ/Organism router stubs |
 | P3 | 5 Protein Types | M | Distinct execution + validation per protein category |
 | P4 | Intra-Cell Coordination | L | Cells run multi-protein plans, not just one module |
 | P5 | Layered Memory | L | Context builds on prior work; organism has continuity |

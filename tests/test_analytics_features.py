@@ -14,6 +14,7 @@ def test_runtime_events_are_the_primary_analytics_stream():
         "nucleus",
         "mitochondria",
         "ribosome",
+        "bone",       # Osteocyte records bone execution after ribosome
         "protein",
         "golgi",
         "lysosome",
