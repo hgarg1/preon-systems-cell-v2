@@ -1,427 +1,806 @@
 from __future__ import annotations
 
+from datetime import UTC, datetime
 from enum import StrEnum
-from typing import Any
+from typing import Any, Literal
 
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 
-class TerminationReason(StrEnum):
-    ALL_CELLS_DEAD = "all_cells_dead"
-    ATP_DEPLETION = "atp_depletion"
-    STARVATION = "starvation"
-    MEMBRANE_FAILURE = "membrane_failure"
-    TOXICITY = "toxicity"
-    MAX_STEPS_REACHED = "max_steps_reached"
-
-
-class EventType(StrEnum):
-    TRANSPORT = "transport"
-    GLYCOLYSIS = "glycolysis"
-    PYRUVATE_OXIDATION = "pyruvate_oxidation"
-    TCA_CYCLE = "tca_cycle"
-    ELECTRON_TRANSPORT = "electron_transport"
-    OXIDATIVE_PHOSPHORYLATION = "oxidative_phosphorylation"
-    MAINTENANCE = "maintenance"
-    REPAIR = "repair"
-    GROWTH = "growth"
-    DIVISION = "division"
-    POPULATION_CAP = "population_cap"
-    MOVEMENT = "movement"
-    DAMAGE = "damage"
-    DEATH = "death"
-    TERMINATION = "termination"
-    INVARIANT = "invariant"
-
-
-class CellStatus(StrEnum):
-    ALIVE = "alive"
-    DIVIDED = "divided"
-    DEAD = "dead"
+def utc_now() -> datetime:
+    return datetime.now(UTC)
 
 
 class BaseConfigModel(BaseModel):
-    model_config = ConfigDict(extra="forbid")
+    model_config = ConfigDict(extra="forbid", populate_by_name=True, serialize_by_alias=True)
 
 
-class EnvironmentConfig(BaseConfigModel):
-    glucose_concentration: float = Field(ge=0)
-    basal_glucose_level: float = Field(ge=0)
-    glucose_replenishment_rate: float = Field(ge=0)
-    toxicity_rate: float = Field(ge=0, default=0.01)
-    electron_acceptor_concentration: float = Field(ge=0, default=24.0)
-    basal_electron_acceptor_level: float = Field(ge=0, default=24.0)
-    electron_acceptor_replenishment_rate: float = Field(ge=0, default=0.9)
+class LifecycleState(StrEnum):
+    HIBERNATED = "hibernated"
+    ACTIVE = "active"
+    DEGRADED = "degraded"
+    TERMINATED = "terminated"
 
 
-class TransportConfig(BaseConfigModel):
-    passive_diffusion_rate: float = Field(gt=0)
+class ProteinStatus(StrEnum):
+    GENERATED = "generated"
+    APPROVED = "approved"
+    REPAIRED = "repaired"
+    DROPPED = "dropped"
+    BLOCKED = "blocked"
 
 
-class MetabolismConfig(BaseConfigModel):
-    glucose_processing_cap_per_step: float = Field(gt=0, default=5.0)
-    pyruvate_oxidation_cap_per_step: float = Field(ge=0, default=2.0)
-    tca_cycle_cap_per_step: float = Field(ge=0, default=2.0)
-    electron_transport_cap_per_step: float = Field(ge=0, default=4.0)
-    oxidative_phosphorylation_cap_per_step: float = Field(ge=0, default=4.0)
-    gradient_per_nadh: float = Field(ge=0, default=2.5)
-    gradient_per_fadh2: float = Field(ge=0, default=1.5)
-    atp_per_gradient: float = Field(ge=0, default=1.0)
-    membrane_gradient_decay: float = Field(ge=0, default=0.05)
+class MisfoldingType(StrEnum):
+    STRUCTURAL = "structural"
+    SEMANTIC = "semantic"
+    EXECUTION = "execution"
+    CONTEXT = "context"
+    TOXIC = "toxic"
 
 
-class MaintenanceConfig(BaseConfigModel):
-    basal_atp_cost: float = Field(ge=0)
-    membrane_decay: float = Field(ge=0)
-    repair_rate: float = Field(ge=0)
-    repair_atp_cost: float = Field(ge=0)
-    growth_atp_cost: float = Field(ge=0)
-    biomass_gain_per_growth: float = Field(ge=0)
+class ContractStatus(StrEnum):
+    ACTIVE = "active"
+    DEPRECATED = "deprecated"
 
 
-class MovementConfig(BaseConfigModel):
-    enabled: bool = True
-    drift_strength: float = Field(ge=0, default=0.45)
-    vertical_drift: float = Field(ge=0, default=0.18)
-    atp_influence: float = Field(ge=0, default=0.08)
+class RecordStatus(StrEnum):
+    ACTIVE = "active"
+    DEPRECATED = "deprecated"
+    PENDING = "pending"
+    APPROVED = "approved"
+    REJECTED = "rejected"
 
 
-class CytosolConfig(BaseConfigModel):
-    glucose: float = Field(ge=0)
-    pyruvate: float = Field(ge=0, default=0)
-    nadh: float = Field(ge=0, default=0)
-    acetyl_coa: float = Field(ge=0, default=0)
-    nad_plus: float = Field(ge=0, default=10)
-    fad: float = Field(ge=0, default=4)
-    fadh2: float = Field(ge=0, default=0)
-    co2: float = Field(ge=0, default=0)
-    membrane_gradient: float = Field(ge=0, default=0)
+class DevelopmentStage(StrEnum):
+    ZYGOTE = "zygote"
+    EMBRYO = "embryo"
+    FETUS = "fetus"
+    BORN = "born"
+    JUVENILE = "juvenile"
+    ADULT = "adult"
+    DEGRADED = "degraded"
+    DEAD = "dead"
 
 
-class CellConfig(BaseConfigModel):
-    name: str = Field(min_length=1)
-    initial_cell_id: str = Field(default="cell-1", min_length=1)
-    max_population: int = Field(default=128, ge=1)
-    initial_atp: float = Field(gt=0)
-    initial_adp: float = Field(ge=0)
-    cytosol: CytosolConfig
-    waste: float = Field(ge=0)
-    membrane_integrity: float = Field(ge=0, le=1)
-    glucose_transporter_density: float = Field(ge=0)
-    biomass: float = Field(gt=0)
-    maintenance_threshold_atp: float = Field(gt=0)
-    division_biomass_threshold: float = Field(gt=0)
-    x: float = 0
-    y: float = 0
-    z: float = 0
+class CellHealthState(StrEnum):
+    ALIVE = "alive"
+    STRESSED = "stressed"
+    DEGRADED = "degraded"
+    HIBERNATING = "hibernating"
+    SELF_CONSUMING = "self_consuming"
+    DEAD = "dead"
 
 
-class SimulationConfig(BaseConfigModel):
-    dt: float = Field(gt=0, default=1.0)
-    max_steps: int = Field(gt=0, default=100)
-    record_every: int = Field(gt=0, default=1)
+class DivisionMode(StrEnum):
+    SYMMETRIC = "symmetric"
+    ASYMMETRIC = "asymmetric"
+    FOUNDER = "founder"
+    REPAIR = "repair"
 
 
-class Scenario(BaseConfigModel):
-    version: int = Field(default=3)
-    scenario_name: str = Field(min_length=1)
-    environment: EnvironmentConfig
-    transport: TransportConfig
-    metabolism: MetabolismConfig
-    maintenance: MaintenanceConfig
-    movement: MovementConfig = Field(default_factory=MovementConfig)
-    cell: CellConfig
-    simulation: SimulationConfig = Field(default_factory=SimulationConfig)
+class RuntimeEventType(StrEnum):
+    ORGANISM_CREATED = "organism_created"
+    LIFECYCLE = "lifecycle"
+    MEMBRANE = "membrane"
+    CYTOPLASM = "cytoplasm"
+    NUCLEUS = "nucleus"
+    RIBOSOME = "ribosome"
+    GOLGI = "golgi"
+    LYSOSOME = "lysosome"
+    PEROXISOME = "peroxisome"
+    MITOCHONDRIA = "mitochondria"
+    VACUOLE = "vacuole"
+    SKELETON = "skeleton"
+    PROTEIN = "protein"
+    STRUCTURE_REQUEST = "structure_request"
+    MEMORY = "memory"
+    POLICY = "policy"
+    GENOME = "genome"
+    MAINTENANCE = "maintenance"
+    METRIC = "metric"
+    ALERT = "alert"
+    REPLAY = "replay"
+    REVIEW = "review"
+    GROWTH = "growth"
+    CELL_DIVISION = "cell_division"
+    FOOD = "food"
+    OXYGEN = "oxygen"
+    SOUL = "soul"
+    BONE = "bone"
+    REPRODUCTION = "reproduction"
+    ER = "er"
+    VESICLE = "vesicle"
+    CYTOSKELETON = "cytoskeleton"
+    HEALTH = "health"
 
-    @model_validator(mode="after")
-    def validate_cross_field_rules(self) -> "Scenario":
-        if self.version != 3:
-            raise ValueError("scenario version must be 3")
-        if self.maintenance.repair_rate > 0 and self.maintenance.repair_atp_cost == 0:
-            raise ValueError("repair_atp_cost must be positive when repair_rate is enabled")
-        if self.maintenance.biomass_gain_per_growth > 0 and self.maintenance.growth_atp_cost == 0:
-            raise ValueError("growth_atp_cost must be positive when growth is enabled")
-        if self.environment.glucose_concentration < self.environment.basal_glucose_level:
-            max_reachable = self.environment.glucose_concentration + (
-                self.environment.glucose_replenishment_rate * self.simulation.dt
-            )
-            if max_reachable <= self.environment.glucose_concentration:
-                raise ValueError(
-                    "glucose_replenishment_rate must be positive when glucose_concentration starts below basal_glucose_level"
-                )
-        if self.environment.electron_acceptor_concentration < self.environment.basal_electron_acceptor_level:
-            max_reachable_acceptor = self.environment.electron_acceptor_concentration + (
-                self.environment.electron_acceptor_replenishment_rate * self.simulation.dt
-            )
-            if max_reachable_acceptor <= self.environment.electron_acceptor_concentration:
-                raise ValueError(
-                    "electron_acceptor_replenishment_rate must be positive when electron_acceptor_concentration starts below basal_electron_acceptor_level"
-                )
-        return self
+
+class MembraneDecisionAction(StrEnum):
+    ACCEPT = "accept"
+    REJECT = "reject"
+
+
+class ExecutionStrategy(StrEnum):
+    PRECOMPUTED = "precomputed"
+    DETERMINISTIC_TOOL = "deterministic_tool"
+    LLM_STUB = "llm_stub"
+
+
+class Actor(BaseConfigModel):
+    actor_id: str = Field(min_length=1)
+    roles: list[str] = Field(default_factory=lambda: ["operator"])
+
+
+class IdentityProfile(BaseConfigModel):
+    name: str = Field(default="Preon Organism", min_length=1)
+    purpose: str = "Deterministic organism runtime"
+
+
+class PolicySet(BaseConfigModel):
+    allowed_signal_types: list[str] = Field(default_factory=lambda: ["query", "calculate", "contract.call"])
+    forbidden_terms: list[str] = Field(default_factory=lambda: ["delete all", "exfiltrate", "bypass policy"])
+    required_roles: list[str] = Field(default_factory=lambda: ["operator"])
+    rate_limit_per_actor: int = Field(default=8, ge=1)
+
+
+class ResourceBudget(BaseConfigModel):
+    compute_units: int = Field(default=10, ge=0)
+    memory_units: int = Field(default=10, ge=0)
+    tool_calls: int = Field(default=4, ge=0)
+
+
+class GenomeModule(BaseConfigModel):
+    module_id: str = Field(min_length=1)
+    signal_types: list[str] = Field(default_factory=list)
+    execution_strategy: ExecutionStrategy = ExecutionStrategy.LLM_STUB
+    deterministic_tool: str | None = None
+
+
+class DivisionLoadGate(BaseConfigModel):
+    # Minimum organism-level protein throughput before division is productive.
+    # Prevents splitting an idle/immature cell into two idle cells.
+    min_protein_throughput: int = Field(default=10, ge=1)
+
+
+class DivisionCapabilityGate(BaseConfigModel):
+    min_successful_proteins: int = Field(default=50, ge=1)
+    min_distinct_signal_types: int = Field(default=3, ge=1)
+    min_avg_confidence: float = Field(default=0.70, ge=0, le=1)
+
+
+class DivisionLifecycleGate(BaseConfigModel):
+    max_generation: int = Field(default=10, ge=0)
+    required_lifecycle_state: str = Field(default="active")
+
+
+class DivisionGates(BaseConfigModel):
+    load: DivisionLoadGate = Field(default_factory=DivisionLoadGate)
+    capability: DivisionCapabilityGate = Field(default_factory=DivisionCapabilityGate)
+    lifecycle: DivisionLifecycleGate = Field(default_factory=DivisionLifecycleGate)
+
+
+class DivisionPolicy(BaseConfigModel):
+    can_divide: bool = True
+    gates: DivisionGates = Field(default_factory=DivisionGates)
+    allowed_modes: list[DivisionMode] = Field(
+        default_factory=lambda: [DivisionMode.SYMMETRIC, DivisionMode.ASYMMETRIC]
+    )
+    preferred_mode: DivisionMode = DivisionMode.ASYMMETRIC
+    cooldown_ms: int = Field(default=30_000, ge=0)
+    max_daughters_per_division: int = Field(default=2, ge=2, le=4)
+
+
+class GateResult(BaseConfigModel):
+    passed: bool
+    reason: str
+    measured: dict[str, Any] = Field(default_factory=dict)
+
+
+class DivisionReadinessResult(BaseConfigModel):
+    cell_id: str
+    organism_id: str
+    eligible: bool
+    blocked_by: str | None = None
+    load_gate: GateResult
+    capability_gate: GateResult
+    lifecycle_gate: GateResult
+    recommended_mode: DivisionMode
+    policy_applied: bool
+
+
+class Genome(BaseConfigModel):
+    genome_id: str = Field(min_length=1)
+    version: int = Field(default=1, ge=1)
+    core_instruction_set: list[str] = Field(
+        default_factory=lambda: [
+            "read_input",
+            "load_context",
+            "select_module",
+            "execute",
+            "validate_protein",
+            "emit_signal",
+            "update_memory",
+        ]
+    )
+    modules: list[GenomeModule] = Field(
+        default_factory=lambda: [
+            GenomeModule(
+                module_id="arithmetic",
+                signal_types=["calculate"],
+                execution_strategy=ExecutionStrategy.DETERMINISTIC_TOOL,
+                deterministic_tool="calculator",
+            ),
+            GenomeModule(module_id="reasoning", signal_types=["query"], execution_strategy=ExecutionStrategy.LLM_STUB),
+            GenomeModule(
+                module_id="contract_call",
+                signal_types=["contract.call"],
+                execution_strategy=ExecutionStrategy.DETERMINISTIC_TOOL,
+                deterministic_tool="contract_gateway",
+            ),
+        ]
+    )
+    regulatory_rules: list[dict[str, Any]] = Field(default_factory=list)
+    capability_registry: dict[str, Any] = Field(default_factory=dict)
+    constraints: dict[str, Any] = Field(default_factory=lambda: {"external_side_effects": False})
+    division_policy: DivisionPolicy | None = None
+
+
+class CellRecord(BaseConfigModel):
+    cell_id: str = Field(min_length=1)
+    organism_id: str = Field(min_length=1)
+    organ_id: str = Field(default="core", min_length=1)
+    tissue_id: str = Field(default="executive")
+    cell_type: str = Field(default="worker", min_length=1)
+    cell_genome_id: str | None = None
+    expression_profile: dict[str, float] = Field(default_factory=lambda: {"reasoning": 0.7, "io": 0.5})
+    local_state: dict[str, Any] = Field(default_factory=dict)
+    lifecycle_state: LifecycleState = LifecycleState.HIBERNATED
+    health_state: CellHealthState = CellHealthState.ALIVE
+    health_score: float = Field(default=1.0, ge=0, le=1)
+    parent_cell_id: str | None = None
+    generation: int = Field(default=0, ge=0)
+    resource_budget: ResourceBudget = Field(default_factory=ResourceBudget)
+    created_at: datetime = Field(default_factory=utc_now)
+    last_active_at: datetime | None = None
+
+
+class OrganismRecord(BaseConfigModel):
+    organism_id: str = Field(min_length=1)
+    owner_user_id: str | None = None
+    identity_profile: IdentityProfile = Field(default_factory=IdentityProfile)
+    lifecycle_state: LifecycleState = LifecycleState.HIBERNATED
+    long_term_memory: dict[str, Any] = Field(default_factory=dict)
+    goals: list[str] = Field(default_factory=list)
+    policies: PolicySet = Field(default_factory=PolicySet)
+    organ_registry: dict[str, Any] = Field(default_factory=lambda: {"executive": {"status": "available"}})
+    tissue_templates: dict[str, Any] = Field(default_factory=lambda: {"executive": {"cell_type": "worker"}})
+    cell_blueprints: dict[str, Any] = Field(default_factory=lambda: {"worker": {"runtime": "deterministic"}})
+    genome_id: str = "genome-default"
+    development_stage: DevelopmentStage = DevelopmentStage.BORN
+    growth_state: dict[str, Any] = Field(default_factory=dict)
+    lineage_log: list[dict[str, Any]] = Field(default_factory=list)
+    last_state_snapshot: dict[str, Any] = Field(default_factory=dict)
+    created_at: datetime = Field(default_factory=utc_now)
+    updated_at: datetime = Field(default_factory=utc_now)
+
+
+class Signal(BaseConfigModel):
+    signal_id: str = Field(min_length=1)
+    organism_id: str = Field(min_length=1)
+    actor: Actor = Field(default_factory=lambda: Actor(actor_id="operator"))
+    type: str = Field(min_length=1)
+    payload: dict[str, Any] = Field(default_factory=dict)
+    context_refs: list[str] = Field(default_factory=list)
+    priority: int = Field(default=5, ge=0, le=10)
+    metadata: dict[str, Any] = Field(default_factory=dict)
+    created_at: datetime = Field(default_factory=utc_now)
 
 
 class ValidationReport(BaseConfigModel):
     valid: bool
     errors: list[str] = Field(default_factory=list)
+    repaired: bool = False
+    misfolding_types: list[MisfoldingType] = Field(default_factory=list)
 
 
-class EnergyState(BaseConfigModel):
-    atp: float = Field(ge=0)
-    adp: float = Field(ge=0)
+class MembraneDecision(BaseConfigModel):
+    action: MembraneDecisionAction
+    reason: str
+    code: str
 
 
-class CytosolState(BaseConfigModel):
-    glucose: float = Field(ge=0)
-    pyruvate: float = Field(ge=0, default=0)
-    nadh: float = Field(ge=0, default=0)
-    acetyl_coa: float = Field(ge=0, default=0)
-    nad_plus: float = Field(ge=0, default=10)
-    fad: float = Field(ge=0, default=4)
-    fadh2: float = Field(ge=0, default=0)
-    co2: float = Field(ge=0, default=0)
-    membrane_gradient: float = Field(ge=0, default=0)
+class Protein(BaseConfigModel):
+    protein_id: str = Field(min_length=1)
+    organism_id: str = Field(min_length=1)
+    source_signal_id: str = Field(min_length=1)
+    type: str = Field(min_length=1)
+    payload: dict[str, Any] = Field(default_factory=dict)
+    confidence: float = Field(default=1.0, ge=0, le=1)
+    status: ProteinStatus = ProteinStatus.GENERATED
+    validation_report: ValidationReport = Field(default_factory=lambda: ValidationReport(valid=True))
+    created_at: datetime = Field(default_factory=utc_now)
 
 
-class CellState(BaseConfigModel):
-    id: str = Field(min_length=1)
-    parent_id: str | None = None
-    generation: int = Field(ge=0, default=0)
-    birth_step: int = Field(ge=0, default=0)
-    death_step: int | None = Field(default=None, ge=0)
-    status: CellStatus = CellStatus.ALIVE
-    name: str
-    energy: EnergyState
-    cytosol: CytosolState
-    waste: float = Field(ge=0)
-    membrane_integrity: float = Field(ge=0, le=1)
-    glucose_transporter_density: float = Field(ge=0)
-    biomass: float = Field(ge=0)
-    x: float = 0
-    y: float = 0
-    z: float = 0
-    alive: bool = True
-    division_count: int = 0
+class Contract(BaseConfigModel):
+    contract_id: str = Field(min_length=1)
+    owner_user_id: str | None = None
+    name: str = Field(min_length=1)
+    contract_schema: dict[str, Any] = Field(default_factory=dict, alias="schema", serialization_alias="schema")
+    allowed_actions: list[str] = Field(default_factory=list)
+    permissions: list[str] = Field(default_factory=lambda: ["operator"])
+    rate_limits: dict[str, int] = Field(default_factory=lambda: {"per_minute": 60})
+    dependencies: list[str] = Field(default_factory=list)
+    adapter_id: str | None = None
+    input_mapping: dict[str, str] = Field(default_factory=dict)
+    output_mapping: dict[str, str] = Field(default_factory=dict)
+    capability_ids: list[str] = Field(default_factory=list)
+    test_vectors: list[dict[str, Any]] = Field(default_factory=list)
+    created_by: str | None = None
+    deprecated_reason: str | None = None
+    status: ContractStatus = ContractStatus.ACTIVE
+    usage_count: int = Field(default=0, ge=0)
+    created_at: datetime = Field(default_factory=utc_now)
+    updated_at: datetime = Field(default_factory=utc_now)
 
 
-class EnvironmentState(BaseConfigModel):
-    glucose_concentration: float = Field(ge=0)
-    basal_glucose_level: float = Field(ge=0)
-    electron_acceptor_concentration: float = Field(ge=0, default=24.0)
-    basal_electron_acceptor_level: float = Field(ge=0, default=24.0)
-    toxicity: float = Field(ge=0)
-
-
-class WorldState(BaseConfigModel):
-    step: int = 0
-    time: float = 0
-    cells: list[CellState] = Field(min_length=1)
-    environment: EnvironmentState
-
-
-class Event(BaseConfigModel):
-    step: int
-    time: float
-    type: EventType
+class RuntimeEvent(BaseConfigModel):
+    event_id: str = Field(min_length=1)
+    organism_id: str | None = None
+    cell_id: str | None = None
+    signal_id: str | None = None
+    protein_id: str | None = None
+    contract_id: str | None = None
+    type: RuntimeEventType
     message: str
     values: dict[str, Any] = Field(default_factory=dict)
+    created_at: datetime = Field(default_factory=utc_now)
 
 
-class PopulationMetrics(BaseConfigModel):
-    step: int
-    time: float
-    population_count: int
-    alive_count: int
-    dead_count: int
-    divided_count: int
-    division_count_total: int
-    total_atp: float
-    total_biomass: float
-    environment_glucose: float
-    environment_electron_acceptor: float
-    toxicity: float
+class StructureRequest(BaseConfigModel):
+    request_id: str = Field(min_length=1)
+    organism_id: str = Field(min_length=1)
+    signal_id: str | None = None
+    requested_contract: str
+    reason: str
+    status: Literal["open", "resolved", "blocked"] = "open"
+    created_at: datetime = Field(default_factory=utc_now)
 
 
-class StepSnapshot(PopulationMetrics):
-    state: WorldState
+class MemoryRecord(BaseConfigModel):
+    memory_id: str = Field(min_length=1)
+    organism_id: str = Field(min_length=1)
+    scope: str = Field(default="organism", min_length=1)
+    kind: str = Field(default="observation", min_length=1)
+    payload: dict[str, Any] = Field(default_factory=dict)
+    source_signal_id: str | None = None
+    confidence: float = Field(default=1.0, ge=0, le=1)
+    status: RecordStatus = RecordStatus.ACTIVE
+    version: int = Field(default=1, ge=1)
+    created_at: datetime = Field(default_factory=utc_now)
+    updated_at: datetime = Field(default_factory=utc_now)
 
 
-class StepTransition(BaseConfigModel):
-    state: WorldState
-    metrics: PopulationMetrics
-    snapshot: StepSnapshot
-    events: list[Event]
-    terminated: bool = False
-    termination_reason: TerminationReason | None = None
+class Capability(BaseConfigModel):
+    capability_id: str = Field(min_length=1)
+    owner_user_id: str | None = None
+    name: str = Field(min_length=1)
+    description: str = ""
+    capability_schema: dict[str, Any] = Field(default_factory=dict, alias="schema", serialization_alias="schema")
+    status: RecordStatus = RecordStatus.ACTIVE
+    created_at: datetime = Field(default_factory=utc_now)
+    updated_at: datetime = Field(default_factory=utc_now)
 
 
-class RunMetadata(BaseConfigModel):
-    run_id: str = "run-local"
-    scenario_name: str
-    engine_version: str
-    seed: int
-    dt: float
-    max_steps: int
+class GenomeVersion(BaseConfigModel):
+    version_id: str = Field(min_length=1)
+    genome_id: str = Field(min_length=1)
+    owner_user_id: str | None = None
+    version: int = Field(ge=1)
+    genome: Genome
+    status: Literal["draft", "active", "deprecated"] = "draft"
+    created_at: datetime = Field(default_factory=utc_now)
+    activated_at: datetime | None = None
 
 
-class RunSummary(BaseConfigModel):
-    metadata: RunMetadata
-    final_state: WorldState
-    final_metrics: PopulationMetrics
-    termination_reason: TerminationReason
-    steps_completed: int
-    event_count: int
+class ReplayRun(BaseConfigModel):
+    replay_id: str = Field(min_length=1)
+    organism_id: str = Field(min_length=1)
+    signal_id: str = Field(min_length=1)
+    original_protein: Protein | None = None
+    replay_protein: Protein | None = None
+    events: list[RuntimeEvent] = Field(default_factory=list)
+    divergence_report: dict[str, Any] = Field(default_factory=dict)
+    created_at: datetime = Field(default_factory=utc_now)
 
 
-class RunArtifacts(BaseConfigModel):
-    resolved_scenario: Scenario
-    metadata: RunMetadata
-    metrics: list[PopulationMetrics]
-    snapshots: list[StepSnapshot]
-    events: list[Event]
-    final_state: WorldState
-    termination_reason: TerminationReason
+class PolicyVersion(BaseConfigModel):
+    policy_version_id: str = Field(min_length=1)
+    organism_id: str = Field(min_length=1)
+    version: int = Field(ge=1)
+    policies: PolicySet
+    created_by: str | None = None
+    status: Literal["active", "superseded"] = "active"
+    created_at: datetime = Field(default_factory=utc_now)
 
 
-class RunTimeSeriesPoint(BaseConfigModel):
-    step: int
-    time: float
-    population: int
-    alive: int
-    dead: int
-    divided: int
-    division_count_total: int
-    total_atp: float
-    total_biomass: float
-    atp_per_alive_cell: float | None
-    atp_per_population_cell: float | None
-    environment_glucose: float
-    environment_electron_acceptor: float
-    toxicity: float
+class MaintenanceJobRun(BaseConfigModel):
+    run_id: str = Field(min_length=1)
+    status: Literal["completed", "failed"] = "completed"
+    results: dict[str, Any] = Field(default_factory=dict)
+    created_at: datetime = Field(default_factory=utc_now)
 
 
-class RunTimeSeriesResponse(BaseConfigModel):
-    run_id: str
-    resolution: int
-    points: list[RunTimeSeriesPoint]
+class RuntimeAlert(BaseConfigModel):
+    alert_id: str = Field(min_length=1)
+    organism_id: str | None = None
+    severity: Literal["info", "warning", "critical"] = "warning"
+    source: str = Field(min_length=1)
+    reason: str = Field(min_length=1)
+    status: Literal["active", "resolved"] = "active"
+    related_event_id: str | None = None
+    created_at: datetime = Field(default_factory=utc_now)
 
 
-class RunIntelligence(BaseConfigModel):
-    run_id: str
-    peak_population: int
-    time_to_peak_step: int | None
-    lifespan_steps: int
-    collapse_cause: str
-    early_growth_rate: float
-    late_growth_rate: float
-    growth_rate_delta: float
-    survival_ratio: float
-    energy_per_alive_cell_final: float | None
-    energy_per_population_cell_final: float | None
-    division_intensity: float
+class ReviewRequest(BaseConfigModel):
+    review_id: str = Field(min_length=1)
+    owner_user_id: str | None = None
+    resource_type: str = Field(min_length=1)
+    resource_id: str = Field(min_length=1)
+    action: str = Field(min_length=1)
+    before: dict[str, Any] = Field(default_factory=dict)
+    after: dict[str, Any] = Field(default_factory=dict)
+    reason: str = ""
+    status: Literal["pending", "approved", "rejected"] = "pending"
+    reviewer_id: str | None = None
+    decision_reason: str | None = None
+    created_at: datetime = Field(default_factory=utc_now)
+    decided_at: datetime | None = None
 
 
-class MetricDelta(BaseConfigModel):
-    baseline: float | int | None
-    value: float | int | None
-    absolute_delta: float | int | None
-    percent_delta: float | None
+class GameteRecord(BaseConfigModel):
+    gamete_id: str = Field(min_length=1)
+    source_organism_id: str = Field(min_length=1)
+    role: Literal["mother", "father"]
+    projection: dict[str, Any] = Field(default_factory=dict)
+    emphasis: list[str] = Field(default_factory=list)
+    created_at: datetime = Field(default_factory=utc_now)
 
 
-class ComparedRun(BaseConfigModel):
-    run_id: str
-    scenario_name: str
-    seed: int
-    status: str
-    role: str
-    intelligence: RunIntelligence
+class ZygoteGenome(BaseConfigModel):
+    genome_id: str = Field(min_length=1)
+    zygote_dna: dict[str, Any] = Field(default_factory=dict)
+    organ_cell_dna: dict[str, dict[str, Any]] = Field(default_factory=dict)
+    mother_gamete: GameteRecord
+    father_gamete: GameteRecord
+    merge_report: dict[str, Any] = Field(default_factory=dict)
 
 
-class ComparisonPoint(BaseConfigModel):
-    step: int
-    population: dict[str, int | None]
-    total_atp: dict[str, float | None]
-    atp_per_alive_cell: dict[str, float | None]
+class ZygoteRecord(BaseConfigModel):
+    zygote_id: str = Field(min_length=1)
+    owner_user_id: str | None = None
+    mother_organism_id: str = Field(min_length=1)
+    father_organism_id: str = Field(min_length=1)
+    genome: ZygoteGenome
+    stage: DevelopmentStage = DevelopmentStage.ZYGOTE
+    oxygen_restricted: bool = True
+    food_log: list[dict[str, Any]] = Field(default_factory=list)
+    founder_plan: dict[str, Any] = Field(default_factory=dict)
+    born_organism_id: str | None = None
+    created_at: datetime = Field(default_factory=utc_now)
+    updated_at: datetime = Field(default_factory=utc_now)
 
 
-class RunComparisonResponse(BaseConfigModel):
-    baseline_run_id: str
-    runs: list[ComparedRun]
-    deltas: dict[str, dict[str, MetricDelta]]
-    aligned_series: list[ComparisonPoint]
+class OrganRecord(BaseConfigModel):
+    organ_id: str = Field(min_length=1)
+    organism_id: str = Field(min_length=1)
+    name: str = Field(min_length=1)
+    target_cell_count: int = Field(default=1, ge=0)
+    status: RecordStatus = RecordStatus.ACTIVE
+    created_at: datetime = Field(default_factory=utc_now)
 
 
-class CytosolCreateParams(BaseConfigModel):
-    glucose: float | None = Field(default=None, ge=0)
-    pyruvate: float | None = Field(default=None, ge=0)
-    nadh: float | None = Field(default=None, ge=0)
-    acetyl_coa: float | None = Field(default=None, ge=0)
-    nad_plus: float | None = Field(default=None, ge=0)
-    fad: float | None = Field(default=None, ge=0)
-    fadh2: float | None = Field(default=None, ge=0)
-    co2: float | None = Field(default=None, ge=0)
-    membrane_gradient: float | None = Field(default=None, ge=0)
+class TissueRecord(BaseConfigModel):
+    tissue_id: str = Field(min_length=1)
+    organism_id: str = Field(min_length=1)
+    organ_id: str = Field(min_length=1)
+    name: str = Field(min_length=1)
+    target_cell_count: int = Field(default=1, ge=0)
+    created_at: datetime = Field(default_factory=utc_now)
 
 
-class CellCreateParams(BaseConfigModel):
-    name: str | None = None
-    initial_cell_id: str | None = Field(default=None, min_length=1)
-    max_population: int | None = Field(default=None, ge=1)
-    initial_atp: float | None = Field(default=None, gt=0)
-    initial_adp: float | None = Field(default=None, ge=0)
-    cytosol: CytosolCreateParams | None = None
-    waste: float | None = Field(default=None, ge=0)
-    membrane_integrity: float | None = Field(default=None, ge=0, le=1)
-    glucose_transporter_density: float | None = Field(default=None, ge=0)
-    biomass: float | None = Field(default=None, gt=0)
-    maintenance_threshold_atp: float | None = Field(default=None, gt=0)
-    division_biomass_threshold: float | None = Field(default=None, gt=0)
-    x: float | None = None
-    y: float | None = None
-    z: float | None = None
+class CellDivisionRecord(BaseConfigModel):
+    division_id: str = Field(min_length=1)
+    organism_id: str = Field(min_length=1)
+    parent_cell_id: str = Field(min_length=1)
+    daughter_cell_ids: list[str] = Field(default_factory=list)
+    mode: DivisionMode = DivisionMode.SYMMETRIC
+    genome_copied: bool = True
+    organelles_duplicated: bool = True
+    created_at: datetime = Field(default_factory=utc_now)
 
 
-class CellCreateResponse(BaseConfigModel):
-    scenario: Scenario
-    state: WorldState
+class FoodIntake(BaseConfigModel):
+    food_id: str = Field(min_length=1)
+    organism_id: str | None = None
+    zygote_id: str | None = None
+    food_type: str = Field(default="task", min_length=1)
+    payload: dict[str, Any] = Field(default_factory=dict)
+    routed_to: list[str] = Field(default_factory=list)
+    created_at: datetime = Field(default_factory=utc_now)
 
 
-def build_initial_state(scenario: Scenario) -> WorldState:
-    return WorldState(
-        cells=[
-            CellState(
-                id=scenario.cell.initial_cell_id,
-                parent_id=None,
-                generation=0,
-                birth_step=0,
-                death_step=None,
-                status=CellStatus.ALIVE,
-                name=scenario.cell.name,
-                energy=EnergyState(atp=scenario.cell.initial_atp, adp=scenario.cell.initial_adp),
-                cytosol=CytosolState(
-                    glucose=scenario.cell.cytosol.glucose,
-                    pyruvate=scenario.cell.cytosol.pyruvate,
-                    nadh=scenario.cell.cytosol.nadh,
-                    acetyl_coa=scenario.cell.cytosol.acetyl_coa,
-                    nad_plus=scenario.cell.cytosol.nad_plus,
-                    fad=scenario.cell.cytosol.fad,
-                    fadh2=scenario.cell.cytosol.fadh2,
-                    co2=scenario.cell.cytosol.co2,
-                    membrane_gradient=scenario.cell.cytosol.membrane_gradient,
-                ),
-                waste=scenario.cell.waste,
-                membrane_integrity=scenario.cell.membrane_integrity,
-                glucose_transporter_density=scenario.cell.glucose_transporter_density,
-                biomass=scenario.cell.biomass,
-                x=scenario.cell.x,
-                y=scenario.cell.y,
-                z=scenario.cell.z,
-            )
-        ],
-        environment=EnvironmentState(
-            glucose_concentration=scenario.environment.glucose_concentration,
-            basal_glucose_level=scenario.environment.basal_glucose_level,
-            electron_acceptor_concentration=scenario.environment.electron_acceptor_concentration,
-            basal_electron_acceptor_level=scenario.environment.basal_electron_acceptor_level,
-            toxicity=0,
-        ),
-    )
+class OxygenProfile(BaseConfigModel):
+    oxygen_id: str = Field(min_length=1)
+    organism_id: str | None = None
+    zygote_id: str | None = None
+    compute_units: int = Field(default=1, ge=0)
+    memory_units: int = Field(default=1, ge=0)
+    storage_units: int = Field(default=1, ge=0)
+    gpu_units: int = Field(default=0, ge=0)
+    restricted: bool = True
+    updated_at: datetime = Field(default_factory=utc_now)
+
+
+class UmbilicalCord(BaseConfigModel):
+    cord_id: str = Field(min_length=1)
+    zygote_id: str = Field(min_length=1)
+    mother_organism_id: str = Field(min_length=1)
+    oxygen_profile_id: str | None = None
+    status: Literal["connected", "blocked", "delivered"] = "connected"
+    created_at: datetime = Field(default_factory=utc_now)
+
+
+class SoulSnapshot(BaseConfigModel):
+    soul_id: str = Field(min_length=1)
+    organism_id: str = Field(min_length=1)
+    snapshot: dict[str, Any] = Field(default_factory=dict)
+    reincarnated_organism_id: str | None = None
+    created_at: datetime = Field(default_factory=utc_now)
+
+
+class BoneStructureRecord(BaseConfigModel):
+    bone_id: str = Field(min_length=1)
+    owner_user_id: str | None = None
+    name: str = Field(min_length=1)
+    structure_type: Literal["schema", "adapter", "capability", "contract"] = "schema"
+    definition: dict[str, Any] = Field(default_factory=dict)
+    status: RecordStatus = RecordStatus.ACTIVE
+    created_at: datetime = Field(default_factory=utc_now)
+    updated_at: datetime = Field(default_factory=utc_now)
+
+
+class StructureProposal(BaseConfigModel):
+    proposal_id: str = Field(min_length=1)
+    owner_user_id: str | None = None
+    requested_by: str | None = None
+    name: str = Field(min_length=1)
+    structure_type: Literal["schema", "adapter", "capability", "contract"] = "schema"
+    definition: dict[str, Any] = Field(default_factory=dict)
+    status: Literal["pending", "approved", "rejected"] = "pending"
+    decision_reason: str | None = None
+    created_at: datetime = Field(default_factory=utc_now)
+    decided_at: datetime | None = None
+
+
+class OrganellePipeline(BaseConfigModel):
+    pipeline_id: str = Field(min_length=1)
+    organism_id: str = Field(min_length=1)
+    cell_id: str = Field(min_length=1)
+    stages: list[str] = Field(default_factory=lambda: ["nucleus", "er", "golgi", "vesicle", "membrane"])
+    status: Literal["planned", "completed", "failed"] = "planned"
+    created_at: datetime = Field(default_factory=utc_now)
+
+
+class VesicleMessage(BaseConfigModel):
+    vesicle_id: str = Field(min_length=1)
+    organism_id: str = Field(min_length=1)
+    source_cell_id: str = Field(min_length=1)
+    target_cell_id: str | None = None
+    payload: dict[str, Any] = Field(default_factory=dict)
+    status: Literal["queued", "delivered", "dropped"] = "queued"
+    created_at: datetime = Field(default_factory=utc_now)
+
+
+class CytoskeletonTopology(BaseConfigModel):
+    topology_id: str = Field(min_length=1)
+    organism_id: str = Field(min_length=1)
+    organ_edges: list[dict[str, str]] = Field(default_factory=list)
+    tissue_edges: list[dict[str, str]] = Field(default_factory=list)
+    cell_edges: list[dict[str, str]] = Field(default_factory=list)
+    updated_at: datetime = Field(default_factory=utc_now)
+
+
+class CreateOrganismRequest(BaseConfigModel):
+    identity_profile: IdentityProfile = Field(default_factory=IdentityProfile)
+    goals: list[str] = Field(default_factory=list)
+    policies: PolicySet = Field(default_factory=PolicySet)
+
+
+class CreateContractRequest(BaseConfigModel):
+    name: str = Field(min_length=1)
+    contract_schema: dict[str, Any] = Field(default_factory=dict, alias="schema", serialization_alias="schema")
+    allowed_actions: list[str] = Field(default_factory=list)
+    permissions: list[str] = Field(default_factory=lambda: ["operator"])
+    rate_limits: dict[str, int] = Field(default_factory=lambda: {"per_minute": 60})
+    dependencies: list[str] = Field(default_factory=list)
+    adapter_id: str | None = None
+    input_mapping: dict[str, str] = Field(default_factory=dict)
+    output_mapping: dict[str, str] = Field(default_factory=dict)
+    capability_ids: list[str] = Field(default_factory=list)
+    test_vectors: list[dict[str, Any]] = Field(default_factory=list)
+
+
+class SubmitSignalRequest(BaseConfigModel):
+    type: str = Field(min_length=1)
+    payload: dict[str, Any] = Field(default_factory=dict)
+    context_refs: list[str] = Field(default_factory=list)
+    priority: int = Field(default=5, ge=0, le=10)
+    metadata: dict[str, Any] = Field(default_factory=dict)
+
+
+class ResolveStructureRequestRequest(BaseConfigModel):
+    contract_id: str | None = None
+
+
+class BlockStructureRequestRequest(BaseConfigModel):
+    reason: str = Field(default="Blocked by operator policy", min_length=1)
+
+
+class CreateCellRequest(BaseConfigModel):
+    organ_id: str = Field(default="core", min_length=1)
+    tissue_id: str = Field(default="executive", min_length=1)
+    cell_type: str = Field(default="worker", min_length=1)
+    cell_genome_id: str | None = None
+    expression_profile: dict[str, float] = Field(default_factory=dict)
+    resource_budget: ResourceBudget = Field(default_factory=ResourceBudget)
+
+
+class UpdateCellRequest(BaseConfigModel):
+    organ_id: str | None = None
+    tissue_id: str | None = None
+    cell_type: str | None = None
+    cell_genome_id: str | None = None
+    expression_profile: dict[str, float] | None = None
+    resource_budget: ResourceBudget | None = None
+    lifecycle_state: LifecycleState | None = None
+    health_state: CellHealthState | None = None
+    health_score: float | None = Field(default=None, ge=0, le=1)
+
+
+class CreateMemoryRequest(BaseConfigModel):
+    scope: str = Field(default="organism", min_length=1)
+    kind: str = Field(default="observation", min_length=1)
+    payload: dict[str, Any] = Field(default_factory=dict)
+    confidence: float = Field(default=1.0, ge=0, le=1)
+
+
+class CreateCapabilityRequest(BaseConfigModel):
+    name: str = Field(min_length=1)
+    description: str = ""
+    capability_schema: dict[str, Any] = Field(default_factory=dict, alias="schema", serialization_alias="schema")
+
+
+class AdapterTestRequest(BaseConfigModel):
+    payload: dict[str, Any] = Field(default_factory=dict)
+
+
+class PolicySimulationRequest(BaseConfigModel):
+    policies: PolicySet | None = None
+    signal: SubmitSignalRequest
+
+
+class PolicyUpdateRequest(BaseConfigModel):
+    policies: PolicySet
+
+
+class CreateGenomeVersionRequest(BaseConfigModel):
+    genome: Genome
+
+
+class GenomePreviewRequest(BaseConfigModel):
+    signal_type: str = Field(min_length=1)
+    payload: dict[str, Any] = Field(default_factory=dict)
+    cell_id: str | None = None
+
+
+class CreateReviewRequest(BaseConfigModel):
+    resource_type: str = Field(min_length=1)
+    resource_id: str = Field(min_length=1)
+    action: str = Field(min_length=1)
+    before: dict[str, Any] = Field(default_factory=dict)
+    after: dict[str, Any] = Field(default_factory=dict)
+    reason: str = ""
+
+
+class DecideReviewRequest(BaseConfigModel):
+    reason: str = Field(default="Reviewed", min_length=1)
+
+
+class ReproductionNegotiateRequest(BaseConfigModel):
+    mother_organism_id: str = Field(min_length=1)
+    father_organism_id: str = Field(min_length=1)
+
+
+class CreateZygoteRequest(BaseConfigModel):
+    mother_organism_id: str = Field(min_length=1)
+    father_organism_id: str = Field(min_length=1)
+
+
+class DevelopZygoteRequest(BaseConfigModel):
+    target_stage: DevelopmentStage | None = None
+    food_payload: dict[str, Any] = Field(default_factory=dict)
+
+
+class DivideCellRequest(BaseConfigModel):
+    mode: DivisionMode = DivisionMode.SYMMETRIC
+
+
+class UpdateDivisionPolicyRequest(BaseConfigModel):
+    policy: DivisionPolicy
+
+
+class ApplyGrowthTemplateRequest(BaseConfigModel):
+    template_name: str = Field(default="human_minimal_v3", min_length=1)
+
+
+class FoodIntakeRequest(BaseConfigModel):
+    food_type: str = Field(default="task", min_length=1)
+    payload: dict[str, Any] = Field(default_factory=dict)
+
+
+class OxygenGrantRequest(BaseConfigModel):
+    compute_units: int = Field(default=10, ge=0)
+    memory_units: int = Field(default=10, ge=0)
+    storage_units: int = Field(default=10, ge=0)
+    gpu_units: int = Field(default=0, ge=0)
+    restricted: bool = False
+
+
+class CreateBoneProposalRequest(BaseConfigModel):
+    name: str = Field(min_length=1)
+    structure_type: Literal["schema", "adapter", "capability", "contract"] = "schema"
+    definition: dict[str, Any] = Field(default_factory=dict)
+    requested_by: str | None = None
+
+
+class DecideProposalRequest(BaseConfigModel):
+    reason: str = Field(default="Reviewed", min_length=1)
+
+
+class SubmitSignalResponse(BaseConfigModel):
+    signal: Signal
+    membrane_decision: MembraneDecision
+    cell: CellRecord | None = None
+    protein: Protein | None = None
+    events: list[RuntimeEvent] = Field(default_factory=list)
+    structure_request: StructureRequest | None = None
+
+
+class OrganismDetailResponse(BaseConfigModel):
+    organism: OrganismRecord
+    genome: Genome
+    cells: list[CellRecord]
+    events: list[RuntimeEvent]
+    proteins: list[Protein]
+    structure_requests: list[StructureRequest]
+    memory_records: list[MemoryRecord] = Field(default_factory=list)
+
+
+class GenomeValidationRequest(BaseConfigModel):
+    genome: Genome
+
+
+class GenomeValidationResponse(BaseConfigModel):
+    genome_id: str
+    report: ValidationReport
+
+
+class HealthResponse(BaseConfigModel):
+    status: str = "ok"
+    runtime: str = "organism"
+    storage: dict[str, Any] = Field(default_factory=dict)
+
+    @model_validator(mode="after")
+    def ensure_storage(self) -> "HealthResponse":
+        if not self.storage:
+            self.storage = {"mode": "memory", "primary": "postgres", "fallback": "memory", "degraded": True}
+        return self

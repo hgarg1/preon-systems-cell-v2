@@ -4,8 +4,8 @@ from dataclasses import dataclass
 import logging
 import os
 
-from preon_systems_cell.storage.postgres import PostgresRunStore, PostgresSettings, PostgresUnavailableError
-from preon_systems_cell.storage.repositories import InMemoryRunRepository
+from preon_systems_cell.auth import InMemoryAuthRepository, PostgresAuthRepository
+from preon_systems_cell.storage.postgres import PostgresRuntimeStore, PostgresSettings, PostgresUnavailableError
 
 
 logger = logging.getLogger("preon_systems_cell.storage")
@@ -33,21 +33,16 @@ class StorageManager:
     def __init__(
         self,
         *,
-        memory: InMemoryRunRepository,
-        postgres: PostgresRunStore | None,
+        postgres: PostgresRuntimeStore | None,
         status: StorageStatus,
+        auth: InMemoryAuthRepository | PostgresAuthRepository,
     ) -> None:
-        self.memory = memory
         self.postgres = postgres
         self.status = status
+        self.auth = auth
 
     @classmethod
-    async def create(
-        cls,
-        *,
-        settings: PostgresSettings,
-        memory: InMemoryRunRepository,
-    ) -> "StorageManager":
+    async def create(cls, settings: PostgresSettings | None = None) -> "StorageManager":
         forced_mode = os.getenv("PREON_STORAGE_MODE", "postgres").strip().lower()
         if forced_mode == "memory":
             status = StorageStatus(
@@ -58,38 +53,27 @@ class StorageManager:
                 reason="PREON_STORAGE_MODE=memory",
             )
             logger.warning("storage_mode_selected", extra=status.model_dump())
-            return cls(memory=memory, postgres=None, status=status)
-
-        if forced_mode not in {"", "postgres"}:
-            logger.warning("unknown_storage_mode", extra={"requested_mode": forced_mode})
+            return cls(postgres=None, status=status, auth=InMemoryAuthRepository())
 
         try:
-            postgres = await PostgresRunStore.create(settings)
+            postgres = await PostgresRuntimeStore.create(settings or PostgresSettings.from_env())
         except Exception as exc:
-            reason = _public_fallback_reason(exc)
+            if os.getenv("PREON_REQUIRE_POSTGRES", "").strip().lower() in {"1", "true", "yes"}:
+                logger.error("postgres_required_unavailable", extra={"reason": _public_fallback_reason(exc)})
+                raise
             status = StorageStatus(
                 mode="memory",
                 primary="postgres",
                 fallback="memory",
                 degraded=True,
-                reason=reason,
+                reason=_public_fallback_reason(exc),
             )
-            logger.warning(
-                "storage_fallback_activated",
-                exc_info=not isinstance(exc, PostgresUnavailableError),
-                extra=status.model_dump(),
-            )
-            return cls(memory=memory, postgres=None, status=status)
+            logger.warning("storage_fallback_activated", extra=status.model_dump())
+            return cls(postgres=None, status=status, auth=InMemoryAuthRepository())
 
-        status = StorageStatus(
-            mode="postgres",
-            primary="postgres",
-            fallback="memory",
-            degraded=False,
-            reason=None,
-        )
+        status = StorageStatus(mode="postgres", primary="postgres", fallback="memory", degraded=False)
         logger.info("storage_mode_selected", extra=status.model_dump())
-        return cls(memory=memory, postgres=postgres, status=status)
+        return cls(postgres=postgres, status=status, auth=PostgresAuthRepository(postgres._pool))
 
     async def close(self) -> None:
         if self.postgres is not None:

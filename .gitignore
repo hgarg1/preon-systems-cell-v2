@@ -11,3 +11,8 @@ frontend/.env*.local
 .playwright-mcp/
 *.log
 storage-ribbon-*.png
+.env
+postgres-local.log
+tmp/
+tmp-*.png
+v3-console-smoke.png

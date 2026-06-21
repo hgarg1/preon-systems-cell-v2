@@ -3,251 +3,102 @@
   <head>
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-    <title>Preon Systems | Cell v3 Population Engine</title>
-    <link rel="icon" href="data:," />
+    <title>Preon Analytics</title>
+    <link rel="icon" type="image/svg+xml" href="/static/favicon-python.svg" />
     <link rel="stylesheet" href="/static/styles.css" />
   </head>
   <body>
-    <div class="app-shell">
-      <header class="app-header">
-        <div class="brand">
-          <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" class="logo"><path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z"></path></svg>
-          <div class="brand-text">
-            <h1>Preon Systems</h1>
-            <p>Cell v3 Population Engine</p>
-          </div>
-        </div>
-        
-        <div class="header-center">
-          <div id="status" class="status-pill idle">
-            <span class="status-dot"></span>
-            <span class="status-text">System Idle</span>
-          </div>
-        </div>
+    <main class="shell">
 
-        <div class="header-actions">
-          <button id="load-default" class="btn-subtle" title="Reset to defaults">
-            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 12a9 9 0 0 1 9-9 9.75 9.75 0 0 1 6.74 2.74L21 8"></path><path d="M21 3v5h-5"></path><path d="M21 12a9 9 0 0 1-9 9 9.75 9.75 0 0 1-6.74-2.74L3 16"></path><path d="M3 21v-5h5"></path></svg>
-            <span>Defaults</span>
-          </button>
-          <button id="run" class="btn-primary">
-            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polygon points="5 3 19 12 5 21 5 3"></polygon></svg>
-            <span>Run Simulation</span>
-          </button>
+      <header class="topbar">
+        <div class="topbar-left">
+          <h1>Preon Analytics</h1>
+          <span class="tag" id="storage-tag">storage: —</span>
+          <span class="tag" id="runtime-tag">runtime: —</span>
+        </div>
+        <div class="topbar-right">
+          <span class="pulse" id="pulse"></span>
+          <span id="last-refresh" class="muted">not refreshed</span>
+          <button id="sign-out" type="button">Sign out</button>
         </div>
       </header>
 
-      <main class="app-content">
-        <!-- Sidebar: Configuration & Controls -->
-        <aside class="sidebar">
+      <!-- Auth gate -->
+      <section id="auth" class="auth-screen">
+        <form id="auth-form" class="auth-panel">
+          <h2>Sign in</h2>
+          <p class="hint">Read-only analytics — no writes are performed by this interface.</p>
+          <label>Email<input id="email" type="email" autocomplete="email" /></label>
+          <label>Password<input id="password" type="password" autocomplete="current-password" /></label>
+          <button type="submit">Sign in / Register</button>
+          <p id="auth-error" class="error hidden"></p>
+        </form>
+      </section>
+
+      <!-- Dashboard -->
+      <section id="dashboard" class="hidden">
+
+        <!-- Summary strip -->
+        <div class="summary-strip">
+          <div class="stat" id="s-organisms"><span class="n">—</span><span class="l">Organisms</span></div>
+          <div class="stat" id="s-active"><span class="n">—</span><span class="l">Active</span></div>
+          <div class="stat" id="s-hibernated"><span class="n">—</span><span class="l">Hibernated</span></div>
+          <div class="stat" id="s-cells"><span class="n">—</span><span class="l">Cells</span></div>
+          <div class="stat" id="s-contracts"><span class="n">—</span><span class="l">Contracts</span></div>
+          <div class="stat warn" id="s-requests"><span class="n">—</span><span class="l">Open Requests</span></div>
+        </div>
+
+        <!-- Three-column main -->
+        <div class="main-grid">
+
+          <!-- Left: organism selector -->
+          <aside class="panel">
+            <div class="panel-head"><h2>Organisms</h2></div>
+            <div id="organism-list" class="organism-list"></div>
+          </aside>
+
+          <!-- Center: organism detail -->
+          <section class="panel">
+            <div class="panel-head">
+              <span id="detail-name" class="detail-name">Select an organism</span>
+              <span id="detail-badges"></span>
+            </div>
+            <div id="organism-detail">
+              <p class="empty center">← Select an organism to inspect its cells, proteins, and memory.</p>
+            </div>
+          </section>
+
+          <!-- Right: live event stream -->
+          <aside class="panel">
+            <div class="panel-head">
+              <h2>Event Stream</h2>
+              <span id="event-count" class="tag">0</span>
+            </div>
+            <div id="event-stream" class="event-stream"></div>
+          </aside>
+
+        </div>
+
+        <!-- Bottom row: contracts + structure requests -->
+        <div class="bottom-grid">
+
           <div class="panel">
-            <div class="panel-header">
-              <h2>Runtime Parameters</h2>
-            </div>
-            <div class="panel-body">
-              <div class="input-group">
-                <label for="seed">Deterministic Seed</label>
-                <input id="seed" type="number" value="7" />
-              </div>
-              <div class="input-row">
-                <div class="input-group">
-                  <label for="max-steps">Max Steps</label>
-                  <input id="max-steps" type="number" placeholder="Auto" />
-                </div>
-                <div class="input-group">
-                  <label for="dt">dt Override</label>
-                  <input id="dt" type="number" step="0.1" placeholder="Auto" />
-                </div>
-              </div>
-            </div>
+            <div class="panel-head"><h2>Contract Registry</h2></div>
+            <div id="contracts-panel" class="contracts-panel"></div>
           </div>
 
           <div class="panel">
-            <div class="panel-header">
-              <h2>Spatial Placement</h2>
+            <div class="panel-head">
+              <h2>Structure Requests</h2>
+              <span id="open-count" class="tag warn"></span>
             </div>
-            <div class="panel-body">
-              <div class="coordinate-input">
-                <div class="coord">
-                  <label>X</label>
-                  <input id="cell-x" type="number" step="0.1" value="0" />
-                </div>
-                <div class="coord">
-                  <label>Y</label>
-                  <input id="cell-y" type="number" step="0.1" value="0" />
-                </div>
-                <div class="coord">
-                  <label>Z</label>
-                  <input id="cell-z" type="number" step="0.1" value="0" />
-                </div>
-              </div>
-              <button id="create-cell" class="btn-secondary w-full">Apply Coordinates</button>
-              <p class="hint">Double-click the cell in the visualizer to reposition it randomly.</p>
-            </div>
+            <div id="requests-panel" class="requests-panel"></div>
           </div>
 
-          <div class="panel grow">
-            <div class="panel-header">
-              <h2>Operations</h2>
-            </div>
-            <div class="panel-body">
-              <div class="v-stack">
-                <button id="validate" class="btn-ghost w-full justify-start">
-                  <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="20 6 9 17 4 12"></polyline></svg>
-                  Validate Scenario
-                </button>
-              </div>
-              <div id="activity" class="activity-log">
-                Ready for input. Load a scenario to begin.
-              </div>
-            </div>
-          </div>
-        </aside>
-
-        <!-- Main Stage: Visualization and Editor -->
-        <div class="stage">
-          <div class="panel visualizer-panel">
-            <div class="panel-header">
-              <div class="title-group">
-                <h2>Spatial Visualization</h2>
-                <span id="viz-label" class="badge">Awaiting data</span>
-              </div>
-              <button id="viz-fullscreen" class="btn-icon" title="Toggle Fullscreen">
-                <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M8 3H5a2 2 0 0 0-2 2v3m18 0V5a2 2 0 0 0-2-2h-3m0 18h3a2 2 0 0 0 2-2v-3M3 16v3a2 2 0 0 0 2 2h3"></path></svg>
-              </button>
-            </div>
-            <div class="viz-container">
-              <canvas id="space-view"></canvas>
-              <div class="viz-hud">
-                <div class="hud-top">
-                  <div class="cell-id">
-                    <span class="label">Target Cell</span>
-                    <strong id="viz-name">None</strong>
-                  </div>
-                  <div class="cell-coords">
-                    <span id="viz-coords">0.000, 0.000, 0.000</span>
-                  </div>
-                </div>
-              </div>
-            </div>
-          </div>
-
-          <div class="editor-panel">
-            <div class="panel">
-              <div class="panel-header">
-                <h2>Scenario JSON</h2>
-                <span class="subtle">Schema v3</span>
-              </div>
-              <div class="editor-container">
-                <textarea id="scenario" spellcheck="false" placeholder="Paste or edit scenario JSON..."></textarea>
-              </div>
-            </div>
-          </div>
         </div>
 
-        <!-- Right: Results and Metrics -->
-        <aside class="results">
-          <div class="panel">
-            <div class="panel-header">
-              <h2>Performance Metrics</h2>
-            </div>
-            <div id="summary" class="summary-grid">
-              <!-- Dynamically populated -->
-              <div class="empty-results">Run simulation to view metrics.</div>
-            </div>
-          </div>
-
-          <div class="panel grow">
-            <div class="panel-header">
-              <div class="tabs">
-                <button class="tab-btn active" data-tab="response-tab">Response</button>
-                <button class="tab-btn" data-tab="schema-tab">Schema</button>
-              </div>
-              <span id="response-label" class="subtle">Idle</span>
-            </div>
-            <div class="output-container">
-              <div id="response-tab" class="tab-content active">
-                <div id="structured-output" class="structured-output">
-                  <div class="empty-results">Awaiting API interaction...</div>
-                </div>
-                <div class="output-footer">
-                  <button id="open-raw-json" class="btn-ghost btn-sm">View Raw JSON</button>
-                </div>
-              </div>
-              <div id="schema-tab" class="tab-content">
-                <div class="schema-view">
-                  <div class="schema-section">
-                    <h3>Scenario (v3)</h3>
-                    <ul class="schema-list">
-                      <li><b>environment:</b> glucose_concentration, basal_glucose_level, glucose_replenishment_rate, electron_acceptor_concentration, basal_electron_acceptor_level, electron_acceptor_replenishment_rate, toxicity_rate</li>
-                      <li><b>transport:</b> passive_diffusion_rate</li>
-                      <li><b>metabolism:</b> glucose_processing_cap_per_step, pyruvate_oxidation_cap_per_step, tca_cycle_cap_per_step, electron_transport_cap_per_step, oxidative_phosphorylation_cap_per_step</li>
-                      <li><b>maintenance:</b> basal_atp_cost, membrane_decay, repair_rate, growth_atp_cost</li>
-                      <li><b>cell:</b> initial_cell_id, max_population, initial_atp, cytosol.glucose, cytosol.pyruvate, cytosol.nadh, cytosol.acetyl_coa, cytosol.nad_plus, cytosol.fad, cytosol.fadh2, cytosol.co2, cytosol.membrane_gradient, glucose_transporter_density, membrane_integrity, biomass, x, y, z</li>
-                    </ul>
-                  </div>
-                  <div class="schema-section">
-                    <h3>Simulation</h3>
-                    <ul class="schema-list">
-                      <li><b>max_steps:</b> int (default: 100)</li>
-                      <li><b>dt:</b> float (default: 1.0)</li>
-                      <li><b>seed:</b> int (deterministic)</li>
-                    </ul>
-                  </div>
-                </div>
-              </div>
-            </div>
-          </div>
-
-          <div class="panel mini">
-            <div class="panel-header">
-              <h2>API Trace</h2>
-            </div>
-            <div id="request-meta" class="trace-info">
-              <div class="trace-row"><span class="label">Route</span><span class="value">-</span></div>
-              <div class="trace-row"><span class="label">Time</span><span class="value">-</span></div>
-            </div>
-          </div>
-        </aside>
-      </main>
-    </div>
-
-    <!-- Raw JSON Modal -->
-    <div id="json-modal" class="modal">
-      <div class="modal-content">
-        <div class="modal-header">
-          <h2>Raw API Response</h2>
-          <button id="close-json-modal" class="btn-icon">
-            <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><line x1="18" y1="6" x2="6" y2="18"></line><line x1="6" y1="6" x2="18" y2="18"></line></svg>
-          </button>
-        </div>
-        <div class="modal-body">
-          <pre id="response-raw">{}</pre>
-        </div>
-        <div class="modal-footer">
-          <button id="copy-json" class="btn-secondary">Copy to Clipboard</button>
-        </div>
-      </div>
-    </div>
-
-    <div id="cell-modal" class="modal">
-      <div class="modal-content cell-modal-content">
-        <div class="modal-header cell-modal-header">
-          <div>
-            <h2 id="cell-modal-title">Cell Details</h2>
-            <p id="cell-modal-subtitle" class="modal-subtitle">Lineage and lifecycle</p>
-          </div>
-          <button id="close-cell-modal" class="btn-icon" title="Close cell details">
-            <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><line x1="18" y1="6" x2="6" y2="18"></line><line x1="6" y1="6" x2="18" y2="18"></line></svg>
-          </button>
-        </div>
-        <div id="cell-modal-body" class="modal-body cell-modal-body">
-          <div class="empty-results">Double-click a cell row to inspect it.</div>
-        </div>
-      </div>
-    </div>
-
-    <script src="/static/vendor/three.min.js?v=149" defer></script>
+      </section>
+    </main>
     <script src="/static/app.js" defer></script>
   </body>
 </html>

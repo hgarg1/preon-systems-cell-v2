@@ -1,5 +1,7 @@
 import type { Metadata } from "next";
 import { Geist, Geist_Mono } from "next/font/google";
+import { SessionWatchdog } from "@/components/auth/session-watchdog";
+import { AppShell } from "@/components/layout/app-shell";
 import "./globals.css";
 
 const geistSans = Geist({
@@ -13,8 +15,11 @@ const geistMono = Geist_Mono({
 });
 
 export const metadata: Metadata = {
-  title: "Preon Systems Analytics",
-  description: "Run analytics dashboard for multi-cell population simulations.",
+  title: "Preon Organism Runtime",
+  description: "Deterministic organism operations console.",
+  icons: {
+    icon: [{ url: "/icon.svg", type: "image/svg+xml" }],
+  },
 };
 
 export default function RootLayout({
@@ -27,8 +32,9 @@ export default function RootLayout({
       lang="en"
       className={`${geistSans.variable} ${geistMono.variable} h-full antialiased`}
     >
-      <body className="min-h-full flex flex-col bg-background text-foreground">
-        {children}
+      <body className="h-full bg-background text-foreground">
+        <SessionWatchdog />
+        <AppShell>{children}</AppShell>
       </body>
     </html>
   );

@@ -1,370 +1,350 @@
-# Preon Systems Cell
+# Preon Systems Cell v2
 
-Preon Systems Cell is a deterministic, multi-cell simulation and analytics platform for population dynamics, lineage tracing, energy metabolism, and BI-ready run analysis.
+**A deterministic digital organism runtime grounded in biological first principles.**
 
-The project started as a single-cell ATP simulator and has evolved into a full-stack analytics system:
+Preon Cell models living computation: persistent organisms composed of cells, genomes that encode behavior, membrane-controlled signal admission, ribosome execution, ATP-based energy budgeting, and genome-gated cell division. Everything that happens inside an organism is logged, traced, and inspectable.
 
-- Python simulation engine with typed scenario validation
-- FastAPI backend with Postgres-first persistence and in-memory fallback
-- Next.js analytics dashboard for run history, charts, lineage, cell inspection, and run comparison
-- Native BI export pipeline for Parquet, Power BI, and Tableau
-- ML-ready analytics layer for future forecasting, clustering, and run characterization
+---
 
-This is biology-inspired and scientifically anchored, but it is not intended to be a literal biochemical simulator. The model is designed for deterministic experimentation, product analytics, and platform architecture work.
+## The Biological Model
 
-## Current Platform
+Every design decision in this runtime has a biological counterpart.
 
-```text
-Scenario YAML
-    |
-    v
-Python simulation engine
-    |
-    +--> typed run artifacts
-    +--> per-step metrics
-    +--> cell lifecycle state
-    +--> lineage and event logs
-    |
-    v
-FastAPI storage API
-    |
-    +--> Postgres primary storage
-    +--> memory fallback when degraded
-    +--> BI export bundles
-    |
-    v
-Next.js analytics dashboard
-    |
-    +--> population and energy charts
-    +--> run intelligence panel
-    +--> N-run comparison
-    +--> 3D lineage visualization
-    +--> cell drilldown and event navigation
+| Biological concept | Digital implementation |
+|---|---|
+| Organism | `OrganismRecord` — a persistent, named entity that receives signals and maintains state |
+| Cell | `CellRecord` — an execution unit within an organism, with its own health and generation |
+| Genome | `Genome` — encodes the module set, regulatory rules, capability registry, and division policy |
+| Signal | Input event admitted through the membrane |
+| Protein | Validated output produced by the ribosome after processing a signal |
+| ATP (energy) | `resource_budget` — the execution currency, replenished by food + oxygen intake |
+| Food | Structured data intake (prompts, tasks, identity seeds, domain knowledge) |
+| Oxygen | Compute grant (CPU time, memory, context window, GPU units) |
+| Mitochondria | Compute budget manager — food without oxygen causes suffocation |
+| Cell division | Genome-gated split producing daughter cells that inherit or differentiate from the parent |
+| Soul | Preserved essence of a terminated organism, available for reincarnation |
+
+### ATP: The Energy Equation
+
+```
+Food (data / prompts / tasks) + Oxygen (compute / infrastructure) = ATP (execution budget)
 ```
 
-## Highlights
+Resources are modeled as **continuous streams**, not discrete events. Interruptions — sparse prompts, compute outages, sandboxing — are pathological states with recovery semantics, not normal operating modes. An organism that receives food before oxygen is provisioned will suffocate; the runtime enforces oxygen-first ordering structurally.
 
-- **Multi-cell architecture**: each run tracks a retained population, alive/dead/divided status, deterministic lineage IDs, and full descendant history.
-- **Deterministic lineage**: cells use IDs such as `cell-1.2.1`, making ancestry stable across runs with the same seed and scenario.
-- **Cell division semantics**: division creates two daughter cells, splits resources, retains dead/divided cells for history, and continues the simulation until all cells are dead or max steps are reached.
-- **Energy metabolism model**: glucose transport, glycolysis, pyruvate oxidation, TCA cycle, electron transport, oxidative phosphorylation, ATP maintenance, repair, growth, toxicity, and membrane integrity.
-- **Postgres-first runtime**: dashboard APIs persist and read runs, cells, metrics, events, compare data, and exports from Postgres when available.
-- **Graceful fallback**: if Postgres is down, the API starts in memory mode and the dashboard shows a clear yellow degradation ribbon.
-- **Analytics dashboard**: production-style Next.js interface with time-series charts, run intelligence, N-run comparisons, lineage visualization, cell details, and native export controls.
-- **BI-ready data pipeline**: generates Parquet datasets, Power BI project artifacts, and Tableau Hyper assets without CSV as the primary interface.
-- **Tested runtime paths**: backend unit tests, frontend lint/build, live Postgres smoke checks, forced fallback checks, and visual verification of storage status.
+### Genesis: Digital Adam & Eve
+
+The first organism has no parents. It is provisioned through the **Primordial Soup** — a pre-seeded food environment with five food categories:
+
+| Category | Contents |
+|---|---|
+| `identity_seed` | Name, purpose, initial goals |
+| `domain_vocab` | Core terminology the organism will reason over |
+| `reflection` | Prompts for self-modeling |
+| `synthetic_task` | Starter work units to bootstrap protein production |
+| `genome_study` | The organism's own genome as text, for self-awareness |
+
+Oxygen is always granted before food delivery. The Primordial Soup UI in the Operations Console lets operators pre-provision this initial environment before sparking the first organism.
+
+### Cell Division: Three-Gate Model
+
+Cells do not decide to divide. They reach the state the genome was always waiting for. Division is gated behind three co-required conditions encoded in the genome's `DivisionPolicy`:
+
+**Load gate** — throughput threshold. Is the cell processing enough signal volume to justify splitting?
+
+**Capability gate** — quality × breadth threshold. Has the cell demonstrated sufficient output quality across enough distinct signal types to be ready to specialize?
+
+**Lifecycle gate** — generation ceiling, health state, cooldown. Is the cell old enough, healthy enough, and sufficiently rested since its last division?
+
+All three gates must pass simultaneously. The genome specifies the thresholds; the cell's lived experience provides the measurements.
+
+**Four division modes:**
+
+| Mode | Biological analog | Digital purpose |
+|---|---|---|
+| `symmetric` | Mitosis — two identical daughters | Load distribution |
+| `asymmetric` | Stem cell division — one stem + one committed | Capability inheritance + specialization |
+| `founder` | Neural crest migration — daughter seeds a new organ | New cell type progenitor |
+| `repair` | Wound healing — healthy neighbor replaces dead cell | Dead cell replacement (bypasses load/capability gates) |
+
+---
 
 ## Repository Layout
 
-```text
-preon_systems_cell/
-  analytics/       Run intelligence, time-series, comparison, feature extraction
-  bi/              Parquet, Power BI, and Tableau export pipeline
-  domain/          Run and domain-level schema helpers
-  storage/         In-memory and Postgres persistence layers
-  telemetry/       Metric/event collection and sink abstractions
-  api.py           Python API for scenario validation and simulation runs
-  engine.py        Core deterministic simulation step logic
-  models.py        Pydantic schemas for scenarios, state, events, metrics, runs
-  web.py           FastAPI application and dashboard API
-
-frontend/
-  src/app/         Next.js App Router pages
-  src/components/  Dashboard, charts, lineage scene, cell inspector, UI components
-  src/lib/         API client and shared frontend utilities
-
-docs/
-  bi-exports.md    Native BI export workflow
-  dev-setup.md     Development setup notes
-  postgres/        Postgres schema, Timescale fallback, runtime role setup
-
-tests/
-  test_*.py        Engine, API, BI, analytics, storage, and web coverage
+```
+preon-systems-cell-v2/
+├── preon_systems_cell/          # Python backend (FastAPI)
+│   ├── web.py                   # All HTTP routes
+│   ├── api.py                   # Business logic layer
+│   ├── engine.py                # Organism runtime engine
+│   ├── models.py                # Pydantic domain models
+│   ├── auth.py                  # Session auth, OAuth2, CSRF
+│   ├── email.py                 # Transactional email via Gmail OAuth2
+│   ├── email_setup.py           # One-time refresh token setup script
+│   └── storage/                 # PostgreSQL + in-memory stores
+│
+├── frontend/                    # Next.js 16 Operations Console
+│   └── src/
+│       ├── app/                 # App Router pages
+│       │   ├── organisms/       # Organism console, cells, genome, memory, events
+│       │   ├── growth/          # Genesis panel, Primordial Soup, Reproduction
+│       │   ├── contracts/       # Contract registry
+│       │   ├── login/           # Auth pages
+│       │   └── auth/            # OAuth2 callback
+│       ├── components/
+│       │   ├── auth/            # Auth forms, session watchdog, toast
+│       │   ├── console/         # Signal submission, pipeline trace
+│       │   ├── cells/           # Cell inspector, division
+│       │   ├── genome/          # Genome viewer, division policy editor
+│       │   ├── growth/          # Genesis panel, primordial soup
+│       │   └── layout/          # App shell, sidebar
+│       └── lib/
+│           ├── api.ts           # All backend API calls
+│           └── email-server.ts  # Nodemailer server utility
+│
+└── docs/
+    ├── architecture/
+    │   └── decisions/           # ADR-001 through ADR-007
+    └── postgres/                # Schema SQL
 ```
 
-## Requirements
+---
 
+## Stack
+
+**Backend**
 - Python 3.12+
-- Node.js 22.12+ and npm 10+
-- PostgreSQL for durable storage
-- Optional: TimescaleDB, when compatible with your PostgreSQL major version
-- Optional BI extras:
-  - `pyarrow` for Parquet
-  - `tableauhyperapi` for Tableau Hyper
+- FastAPI + Uvicorn
+- Pydantic v2
+- Argon2 password hashing
+- PostgreSQL (optional — falls back to in-memory)
+- Gmail OAuth2 SMTP for transactional email (stdlib only, no extra deps)
 
-## Quick Start: Backend
+**Frontend**
+- Next.js 16 (App Router)
+- React 19
+- TypeScript
+- Tailwind CSS v4
+- Radix UI primitives
+- Recharts
+- Three.js
+- Nodemailer (server-side email utility)
 
-Install the Python package with development, BI, and Postgres extras:
+---
 
-```powershell
-python -m pip install -e ".[dev,bi,postgres]"
+## Getting Started
+
+### 1. Clone and install
+
+```bash
+git clone https://github.com/hgarg1/preon-systems-cell-v2.git
+cd preon-systems-cell-v2
+
+# Python backend
+python -m pip install -e ".[dev,postgres]"
+
+# Next.js frontend
+cd frontend && npm install
 ```
 
-Run tests:
+### 2. Configure environment
 
-```powershell
+Copy `.env.example` to `.env` and fill in the values:
+
+```bash
+cp .env.example .env
+```
+
+Minimum required for local development (no email, no OAuth):
+
+```env
+PREON_COOKIE_DOMAIN=localhost
+PREON_COOKIE_SECURE=0
+PREON_FRONTEND_URL=http://localhost:3000
+```
+
+### 3. Set up Google OAuth (optional but recommended)
+
+Create a **Web application** credential in [Google Cloud Console](https://console.cloud.google.com) → APIs & Services → Credentials.
+
+Add these authorized redirect URIs:
+- `http://localhost:3000/auth/oauth2callback` (dev)
+- `https://yourdomain.com/auth/oauth2callback` (production)
+
+Add to `.env`:
+
+```env
+PREON_GOOGLE_OAUTH_CLIENT_ID=<your-client-id>
+PREON_GOOGLE_OAUTH_CLIENT_SECRET=<your-client-secret>
+PREON_GOOGLE_OAUTH_REDIRECT_URI=http://localhost:3000/auth/oauth2callback
+PREON_GOOGLE_OAUTH_AUTHORIZE_URL=https://accounts.google.com/o/oauth2/v2/auth
+PREON_GOOGLE_OAUTH_TOKEN_URL=https://oauth2.googleapis.com/token
+PREON_GOOGLE_OAUTH_USERINFO_URL=https://www.googleapis.com/oauth2/v3/userinfo
+```
+
+### 4. Set up transactional email (optional)
+
+Obtain a Gmail OAuth2 refresh token for the sending account:
+
+```bash
+# Add GOOGLE_CLIENT_ID and GOOGLE_CLIENT_SECRET to .env first, then:
+python -m preon_systems_cell.email_setup
+```
+
+This opens a browser, completes the consent flow, and prints `GOOGLE_REFRESH_TOKEN` to paste into `.env`. Then add:
+
+```env
+GOOGLE_REFRESH_TOKEN=<token-from-setup>
+GOOGLE_OAUTH_EMAIL=you@gmail.com
+```
+
+Without these vars, verification and reset emails fall back to dev mode — the URLs are returned in the API response and shown as toasts in the frontend.
+
+### 5. Run
+
+```bash
+# Terminal 1 — Python backend
+organism-web
+# or: python -m preon_systems_cell.web
+
+# Terminal 2 — Next.js frontend
+cd frontend && npm run dev
+```
+
+| Interface | URL | Purpose |
+|---|---|---|
+| Operations Console | `http://localhost:3000` | Full CRUD — organisms, signals, cells, genome, growth |
+| Python API | `http://localhost:8000` | FastAPI + Swagger docs at `/docs` |
+| Python static dashboard | `http://localhost:8000` | Read-only monitoring (served by FastAPI) |
+
+---
+
+## Auth
+
+Session auth uses an HttpOnly `preon_session` cookie shared between the Next.js frontend and Python backend via a Next.js rewrite proxy (`/backend/*` → `http://localhost:8000/*`). `PREON_COOKIE_DOMAIN=localhost` in dev lets both ports share the same cookie.
+
+| Feature | Detail |
+|---|---|
+| Registration | Email + password, email verification via tokenized link |
+| Login | Email + password, or Google OAuth |
+| Session TTL | 14 days, sliding window (extended on each `/auth/me` poll when < 7 days remain) |
+| Password reset | Token-based, invalidates all existing sessions on completion |
+| Session watchdog | Polls `/auth/me` every 30 s; shows "Session ended" banner + redirects on 401 |
+| CSRF protection | Origin header validation on all mutating requests |
+| Rate limiting | 8 attempts per 5-minute window on login, signup, and forgot-password |
+
+---
+
+## Core API Routes
+
+```http
+# Organisms
+POST   /api/organisms
+GET    /api/organisms
+GET    /api/organisms/{id}
+POST   /api/organisms/{id}/wake
+POST   /api/organisms/{id}/hibernate
+POST   /api/organisms/{id}/die
+POST   /api/organisms/{id}/food
+POST   /api/organisms/{id}/oxygen
+
+# Signals and events
+POST   /api/organisms/{id}/signals
+GET    /api/organisms/{id}/events
+
+# Cells
+GET    /api/organisms/{id}/cells
+POST   /api/organisms/{id}/cells
+POST   /api/organisms/{id}/cells/{cell_id}/divide
+GET    /api/organisms/{id}/cells/{cell_id}/division-readiness
+
+# Genome
+GET    /api/genomes/{id}
+PATCH  /api/genomes/{id}/division-policy
+
+# Growth
+POST   /api/reproduction/zygote
+POST   /api/zygotes/{id}/develop
+POST   /api/zygotes/{id}/birth
+
+# Contracts and capabilities
+GET    /api/contracts
+POST   /api/contracts
+GET    /api/capabilities
+
+# Auth
+POST   /auth/signup
+POST   /auth/login
+POST   /auth/logout
+GET    /auth/me
+POST   /auth/forgot-password
+POST   /auth/reset-password
+POST   /auth/verify-email
+GET    /auth/oauth/google
+POST   /auth/oauth/google/callback
+```
+
+---
+
+## Architecture Decisions
+
+Seven confirmed decisions are documented in [`docs/architecture/decisions/`](docs/architecture/decisions/):
+
+| ADR | Decision |
+|---|---|
+| [ADR-001](docs/architecture/decisions/ADR-001-atp-continuous-stream-model.md) | Resources are continuous streams; interruptions are pathological |
+| [ADR-002](docs/architecture/decisions/ADR-002-genesis-no-parents.md) | The first organism has no parents — Digital Adam & Eve |
+| [ADR-003](docs/architecture/decisions/ADR-003-primordial-soup-food-seeding.md) | Genesis food is pre-provisioned through a Primordial Soup |
+| [ADR-004](docs/architecture/decisions/ADR-004-oxygen-before-food-invariant.md) | Oxygen is always granted before food delivery |
+| [ADR-005](docs/architecture/decisions/ADR-005-three-gate-division-model.md) | Cell division requires three co-required gates: load, capability, lifecycle |
+| [ADR-006](docs/architecture/decisions/ADR-006-division-policy-in-genome.md) | Division policy belongs in the genome — cells don't decide to divide |
+| [ADR-007](docs/architecture/decisions/ADR-007-division-modes-taxonomy.md) | Four division modes with distinct biological purposes |
+
+---
+
+## Development
+
+```bash
+# Run backend tests
 python -m pytest -q
+
+# TypeScript type check
+cd frontend && npx tsc --noEmit
+
+# Lint
+cd frontend && npm run lint
+
+# Production build
+cd frontend && npm run build
 ```
 
-Run a simulation from the CLI:
+### Persistence
 
-```powershell
-python main.py validate scenarios/default_cell.yaml
-python main.py run scenarios/default_cell.yaml --seed 7 --max-steps 80 --out runs/demo
-python main.py inspect runs/demo/run_summary.json
+The runtime defaults to in-memory storage. To use PostgreSQL:
+
+```env
+PREON_DATABASE_URL=postgresql://user:pass@localhost:5432/preon_cell
 ```
 
-Start FastAPI:
+Schema: [`preon_systems_cell/storage/sql/schema.sql`](preon_systems_cell/storage/sql/schema.sql)
 
-```powershell
-simulate-web
+Tables: `users`, `sessions`, `organisms`, `cells`, `genomes`, `signals`, `proteins`, `contracts`, `runtime_events`, `memory_records`, `structure_requests`, `bones`, `tissues`, `organs`, `souls`, `zygotes`, and auth token tables.
+
+---
+
+## Signal Pipeline Trace
+
+Every signal admitted through the membrane produces a full execution trace visible in the Operations Console:
+
+```
+Signal admitted
+  └─ Membrane: admission check (contract match, capability validation)
+       └─ Cytoplasm: context routing
+            └─ Nucleus: genome/module selection
+                 └─ Ribosome: deterministic execution
+                      └─ Protein: output validation
+                           └─ Golgi: response shaping
+                                └─ Event log + checkpoint
 ```
 
-If the script is not on your `PATH`:
-
-```powershell
-python main.py web
-```
-
-FastAPI runs at:
-
-```text
-http://127.0.0.1:8000
-```
-
-## Quick Start: Next.js Dashboard
-
-In a second shell:
-
-```powershell
-cd frontend
-npm install
-npm run dev
-```
-
-Open:
-
-```text
-http://127.0.0.1:3000
-```
-
-The dashboard uses `NEXT_PUBLIC_API_BASE_URL` and defaults to:
-
-```text
-http://127.0.0.1:8000
-```
-
-Production build:
-
-```powershell
-cd frontend
-npm run lint
-npm run build
-npm run start
-```
-
-## Postgres Runtime
-
-The API is Postgres-first when `PREON_DATABASE_URL` is configured. Use a dedicated runtime role rather than the `postgres` superuser.
-
-Recommended connection string shape:
-
-```powershell
-$env:PREON_DATABASE_URL = "postgresql://preon_app:<url-encoded app password>@127.0.0.1:5432/preon_systems_cell"
-simulate-web
-```
-
-Health includes active storage status:
-
-```http
-GET /health
-```
-
-Healthy Postgres response:
-
-```json
-{
-  "status": "ok",
-  "engine_version": "0.3.0",
-  "storage": {
-    "mode": "postgres",
-    "primary": "postgres",
-    "fallback": "memory",
-    "degraded": false,
-    "reason": null
-  }
-}
-```
-
-Fallback response:
-
-```json
-{
-  "status": "ok",
-  "engine_version": "0.3.0",
-  "storage": {
-    "mode": "memory",
-    "primary": "postgres",
-    "fallback": "memory",
-    "degraded": true,
-    "reason": "Postgres connection failed; using in-memory fallback"
-  }
-}
-```
-
-The dashboard mirrors this state with a storage ribbon:
-
-- green: Postgres connected
-- yellow: memory fallback active
-- red: API status unavailable
-
-See [docs/postgres/README.md](docs/postgres/README.md) for schema setup, the `preon_app` runtime role, TimescaleDB compatibility notes, and operating guidance.
-
-## FastAPI Dashboard API
-
-The Next.js dashboard consumes the `/api/runs*` family.
-
-```http
-GET  /api/runs
-POST /api/runs
-GET  /api/runs/{run_id}
-GET  /api/runs/{run_id}/metrics
-GET  /api/runs/{run_id}/timeseries
-GET  /api/runs/{run_id}/intelligence
-GET  /api/runs/{run_id}/lineage
-GET  /api/runs/{run_id}/cells/{cell_id}
-GET  /api/runs/{run_id}/cells/{cell_id}/events?scope=lineage
-GET  /api/runs/compare?runs=run-a,run-b,run-c
-GET  /api/runs/{run_id}/exports
-POST /api/runs/{run_id}/exports
-GET  /api/runs/{run_id}/exports/{format}/download
-WS   /api/runs/{run_id}/stream
-```
-
-Create a run:
-
-```json
-{
-  "scenario": {
-    "...": "scenario payload"
-  },
-  "seed": 7,
-  "max_steps": 80
-}
-```
-
-Compare up to eight runs:
-
-```http
-GET /api/runs/compare?runs=run-a,run-b,run-c&resolution=1
-```
-
-## Simulation Model
-
-Each run starts from a typed scenario and produces:
-
-- resolved scenario
-- run metadata
-- final world state
-- per-step population metrics
-- step snapshots
-- per-cell events
-- lineage graph
-- termination reason
-
-The world state tracks:
-
-- `cells`: retained multi-cell population
-- `environment`: glucose, electron acceptor, toxicity, basal levels
-- `step` and `time`
-
-Each cell tracks:
-
-- deterministic ID and parent ID
-- generation, birth step, death step
-- status: alive, divided, dead
-- ATP and ADP
-- cytosol resources: glucose, pyruvate, NADH, acetyl-CoA, NAD+, FAD, FADH2, CO2, membrane gradient
-- biomass, waste, membrane integrity, transporter density
-- 3D position
-
-## Analytics
-
-The analytics layer turns raw simulation output into operational signals:
-
-- population versus step
-- total ATP and biomass over time
-- ATP per alive cell
-- peak population
-- time to peak
-- lifespan
-- collapse cause
-- early and late growth rate
-- survival ratio
-- division intensity
-- N-run aligned comparison and deltas
-
-These outputs power the dashboard today and can feed forecasting, clustering, and run classification later.
-
-## BI Exports
-
-The export pipeline generates native analysis bundles:
-
-- **Parquet**: typed analytics tables for warehouse and ML workflows
-- **Power BI**: native project files for Power BI Desktop workflows
-- **Tableau**: Tableau Hyper assets for Tableau analysis
-
-Primary export route:
-
-```http
-GET /api/runs/{run_id}/exports/all/download
-```
-
-See [docs/bi-exports.md](docs/bi-exports.md) for file layout and optional dependency details.
-
-## Verification
-
-Core commands:
-
-```powershell
-python -m pytest -q
-cd frontend
-npm run lint
-npm run build
-```
-
-Recent verification scope:
-
-- backend test suite: 58 passing tests
-- Next.js lint and production build
-- local Postgres smoke through `preon_app`
-- forced memory fallback smoke
-- BI export ZIP validation
-- browser visual check for green Postgres ribbon and yellow fallback ribbon
-
-## Security And Operations
-
-- Do not run the API as the `postgres` superuser outside provisioning or repair work.
-- Do not commit database passwords or local `.env` files.
-- Use `preon_app` or an equivalent least-privilege runtime role.
-- Treat memory fallback as degraded because runs reset when the API process restarts.
-- TimescaleDB is optional; on PostgreSQL versions without a compatible Timescale package, standard Postgres indexes remain active.
-- Watch structured logs for:
-  - `storage_mode_selected`
-  - `storage_fallback_activated`
-  - `timescale_unavailable_using_standard_postgres`
-  - `run_persisted`
-  - `bi_export_created`
-  - BI export failure events
-
-## Development Notes
-
-The platform is intentionally modular:
-
-- the engine can run without FastAPI
-- FastAPI can operate with Postgres or memory fallback
-- the dashboard consumes stable JSON contracts
-- BI exports reuse run artifacts rather than recomputing simulation state
-- analytics code is isolated for future ML feature extraction
-
-That separation keeps the project practical today while leaving room for larger datasets, warehouse integration, and model training workflows.
+The console renders each stage with timing, pass/fail, and the data flowing through.

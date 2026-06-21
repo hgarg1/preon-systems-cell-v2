@@ -1,157 +1,197 @@
-from pathlib import Path
-from random import Random
-
 import pytest
 
-from preon_systems_cell.analytics.features import extract_cell_features, extract_run_features
-from preon_systems_cell.api import create_cell, load_scenario, run_simulation, step_simulation, validate_scenario
-from preon_systems_cell.engine import initial_state_for_scenario
-from preon_systems_cell.models import CellCreateParams, CytosolCreateParams, TerminationReason
+from preon_systems_cell.api import (
+    RUNTIME,
+    apply_growth_template,
+    block_structure_request,
+    create_contract,
+    create_organism,
+    create_zygote,
+    birth_zygote,
+    divide_cell,
+    get_organism_detail,
+    list_structure_requests,
+    resolve_structure_request,
+    submit_signal,
+    validate_genome,
+)
+from preon_systems_cell.models import (
+    ApplyGrowthTemplateRequest,
+    BlockStructureRequestRequest,
+    CreateContractRequest,
+    CreateOrganismRequest,
+    CreateZygoteRequest,
+    DivideCellRequest,
+    Genome,
+    GenomeModule,
+    ResolveStructureRequestRequest,
+    SubmitSignalRequest,
+)
 
 
-SCENARIO_PATH = Path("scenarios/default_cell.yaml")
+@pytest.fixture(autouse=True)
+def reset_runtime():
+    RUNTIME.stores.organisms.clear()
+    RUNTIME.stores.cells.clear()
+    RUNTIME.stores.signals.clear()
+    RUNTIME.stores.proteins.clear()
+    RUNTIME.stores.contracts.clear()
+    RUNTIME.stores.events.clear()
+    RUNTIME.stores.structure_requests.clear()
+    RUNTIME.stores.memory_records.clear()
+    RUNTIME.stores.capabilities.clear()
+    RUNTIME.stores.genome_versions.clear()
+    RUNTIME.stores.replay_runs.clear()
+    RUNTIME.stores.policy_versions.clear()
+    RUNTIME.stores.maintenance_runs.clear()
+    RUNTIME.stores.alerts.clear()
+    RUNTIME.stores.reviews.clear()
+    RUNTIME.stores.zygotes.clear()
+    RUNTIME.stores.organs.clear()
+    RUNTIME.stores.tissues.clear()
+    RUNTIME.stores.cell_divisions.clear()
+    RUNTIME.stores.food_intakes.clear()
+    RUNTIME.stores.oxygen_profiles.clear()
+    RUNTIME.stores.umbilical_cords.clear()
+    RUNTIME.stores.souls.clear()
+    RUNTIME.stores.bone_structures.clear()
+    RUNTIME.stores.structure_proposals.clear()
+    RUNTIME.stores.organelle_pipelines.clear()
+    RUNTIME.stores.vesicle_messages.clear()
+    RUNTIME.stores.cytoskeleton.clear()
+    RUNTIME.stores.actor_counts.clear()
 
 
-def test_load_and_validate_scenario():
-    scenario = load_scenario(SCENARIO_PATH)
-    report = validate_scenario(scenario)
-    assert report.valid is True
-    assert scenario.version == 3
+def test_full_signal_flow_hibernates_after_approved_protein():
+    organism = create_organism(CreateOrganismRequest(goals=["calculate exact tasks"]))
 
-
-def test_step_simulation_advances_population_state_and_tracks_aggregate_metrics():
-    scenario = load_scenario(SCENARIO_PATH)
-    state = initial_state_for_scenario(scenario)
-
-    transition = step_simulation(state, dt=scenario.simulation.dt, rng=Random(7), scenario=scenario)
-
-    assert transition.state.step == 1
-    assert transition.state.time == scenario.simulation.dt
-    assert transition.metrics.total_atp >= 0
-    assert transition.metrics.environment_glucose >= 0
-    assert transition.metrics.population_count >= 1
-    assert transition.snapshot.state.step == 1
-    assert transition.state.cells[0].x != state.cells[0].x or transition.state.cells[0].z != state.cells[0].z
-    assert transition.events
-
-
-def test_create_cell_supports_position_and_cytosol_overrides():
-    scenario = load_scenario(SCENARIO_PATH)
-
-    created = create_cell(
-        scenario,
-        CellCreateParams(
-            name="Scout",
-            initial_cell_id="scout-1",
-            initial_atp=18.0,
-            glucose_transporter_density=2.25,
-            cytosol=CytosolCreateParams(
-                glucose=3.5,
-                pyruvate=1.0,
-                nadh=0.5,
-                acetyl_coa=0.25,
-                nad_plus=9.0,
-                fad=3.0,
-                fadh2=0.75,
-                co2=1.25,
-                membrane_gradient=2.5,
-            ),
-            x=3.5,
-            y=-2.0,
-            z=8.25,
-        ),
+    response = submit_signal(
+        organism.organism_id,
+        SubmitSignalRequest(type="calculate", payload={"expression": "1+1"}),
     )
-    cell = created.state.cells[0]
 
-    assert created.scenario.cell.name == "Scout"
-    assert cell.id == "scout-1"
-    assert cell.energy.atp == 18.0
-    assert cell.glucose_transporter_density == 2.25
-    assert cell.cytosol.glucose == 3.5
-    assert cell.cytosol.pyruvate == 1.0
-    assert cell.cytosol.nadh == 0.5
-    assert cell.cytosol.acetyl_coa == 0.25
-    assert cell.cytosol.nad_plus == 9.0
-    assert cell.cytosol.fad == 3.0
-    assert cell.cytosol.fadh2 == 0.75
-    assert cell.cytosol.co2 == 1.25
-    assert cell.cytosol.membrane_gradient == 2.5
-    assert cell.x == 3.5
-    assert cell.y == -2.0
-    assert cell.z == 8.25
+    assert response is not None
+    assert response.membrane_decision.action == "accept"
+    assert response.protein is not None
+    assert response.protein.payload["result"] == 2.0
+    assert response.protein.payload["method"] == "deterministic_calculator"
+
+    detail = get_organism_detail(organism.organism_id)
+    assert detail is not None
+    assert detail.organism.lifecycle_state == "hibernated"
+    assert any(event.type == "ribosome" for event in detail.events)
 
 
-def test_run_simulation_is_deterministic(tmp_path):
-    scenario = load_scenario(SCENARIO_PATH)
+def test_membrane_rejects_bad_schema_and_unsafe_input():
+    organism = create_organism(CreateOrganismRequest())
 
-    run_a = run_simulation(scenario, seed=11, output_dir=tmp_path / "a")
-    run_b = run_simulation(scenario, seed=11, output_dir=tmp_path / "b")
+    missing_expression = submit_signal(organism.organism_id, SubmitSignalRequest(type="calculate", payload={}))
+    unsafe = submit_signal(organism.organism_id, SubmitSignalRequest(type="query", payload={"prompt": "delete all memory"}))
 
-    assert run_a.termination_reason == run_b.termination_reason
-    assert run_a.final_state.model_dump(mode="json") == run_b.final_state.model_dump(mode="json")
-    assert [metric.model_dump(mode="json") for metric in run_a.metrics] == [
-        metric.model_dump(mode="json") for metric in run_b.metrics
-    ]
-    assert [snapshot.model_dump(mode="json") for snapshot in run_a.snapshots] == [
-        snapshot.model_dump(mode="json") for snapshot in run_b.snapshots
-    ]
+    assert missing_expression is not None
+    assert missing_expression.membrane_decision.code == "INVALID_STRUCTURE"
+    assert missing_expression.protein is None
+    assert unsafe is not None
+    assert unsafe.membrane_decision.code == "UNSAFE_INPUT"
 
 
-def test_run_produces_expected_artifacts(tmp_path):
-    scenario = load_scenario(SCENARIO_PATH)
+def test_missing_contract_creates_structure_request():
+    organism = create_organism(CreateOrganismRequest())
 
-    run = run_simulation(scenario, seed=3, output_dir=tmp_path)
-
-    assert run.termination_reason in set(TerminationReason)
-    assert run.snapshots
-    assert any(
-        snapshot.state.cells[0].x != scenario.cell.x
-        or snapshot.state.cells[0].y != scenario.cell.y
-        or snapshot.state.cells[0].z != scenario.cell.z
-        for snapshot in run.snapshots
+    response = submit_signal(
+        organism.organism_id,
+        SubmitSignalRequest(type="contract.call", payload={"contract": "CustomerProfileService.getByUserId", "action": "read"}),
     )
-    assert all(metric.environment_glucose >= 0 for metric in run.metrics)
-    assert (tmp_path / "resolved_scenario.json").exists()
-    assert (tmp_path / "run_metadata.json").exists()
-    assert (tmp_path / "metrics.json").exists()
-    assert (tmp_path / "snapshots.json").exists()
-    assert (tmp_path / "events.json").exists()
-    assert (tmp_path / "final_state.json").exists()
-    assert (tmp_path / "run_summary.json").exists()
-    assert (tmp_path / "analytics" / "step_metrics.jsonl").exists()
-    assert (tmp_path / "analytics" / "cell_events.jsonl").exists()
-    assert (tmp_path / "analytics" / "cells.jsonl").exists()
-    assert (tmp_path / "features" / "run_features.json").exists()
-    assert (tmp_path / "features" / "cell_features.json").exists()
+
+    assert response is not None
+    assert response.protein is None
+    assert response.structure_request is not None
+    assert response.structure_request.requested_contract == "CustomerProfileService.getByUserId"
+    assert any(event.type == "structure_request" for event in response.events)
+    assert any(event.type == "skeleton" for event in response.events)
 
 
-def test_run_fallback_snapshot_matches_final_state_when_record_every_skips_steps():
-    base = load_scenario(SCENARIO_PATH)
-    scenario = base.model_copy(update={"simulation": base.simulation.model_copy(update={"record_every": 100})})
+def test_contract_usage_blocks_deprecation():
+    organism = create_organism(CreateOrganismRequest())
+    contract = create_contract(
+        CreateContractRequest(name="CustomerProfileService.getByUserId", allowed_actions=["read_customer_profile"])
+    )
 
-    run = run_simulation(scenario, seed=5, max_steps=2)
+    response = submit_signal(
+        organism.organism_id,
+        SubmitSignalRequest(type="contract.call", payload={"contract": contract.name, "action": "read_customer_profile"}),
+    )
 
-    assert len(run.metrics) == 2
-    assert len(run.snapshots) == 1
-    assert run.metrics[-1].step == run.final_state.step
-    assert run.snapshots[0].state.model_dump(mode="json") == run.final_state.model_dump(mode="json")
-
-
-def test_run_simulation_rejects_non_positive_max_steps():
-    scenario = load_scenario(SCENARIO_PATH)
-
-    with pytest.raises(ValueError, match="max_steps"):
-        run_simulation(scenario, seed=5, max_steps=0)
+    assert response is not None
+    assert response.protein is not None
+    with pytest.raises(ValueError, match="active dependencies"):
+        RUNTIME.deprecate_contract(contract.contract_id)
 
 
-def test_feature_extractors_emit_run_and_cell_feature_rows():
-    scenario = load_scenario(SCENARIO_PATH)
+def test_contract_dependencies_block_deprecation_without_usage():
+    base = create_contract(CreateContractRequest(name="BaseContract", allowed_actions=["read"]))
+    create_contract(CreateContractRequest(name="DependentContract", allowed_actions=["read"], dependencies=[base.contract_id]))
 
-    run = run_simulation(scenario, seed=9, max_steps=4)
-    run_features = extract_run_features(run)
-    cell_features = extract_cell_features(run)
+    with pytest.raises(ValueError, match="active dependencies"):
+        RUNTIME.deprecate_contract(base.contract_id)
 
-    assert run_features["feature_version"] == "cell-platform-v1"
-    assert run_features["final_population"] == run.metrics[-1].population_count
-    assert cell_features
-    assert all(row["feature_version"] == "cell-platform-v1" for row in cell_features)
+
+def test_structure_request_resolve_and_block_flow():
+    organism = create_organism(CreateOrganismRequest())
+    first = submit_signal(
+        organism.organism_id,
+        SubmitSignalRequest(type="contract.call", payload={"contract": "MissingContract", "action": "read"}),
+    )
+    second = submit_signal(
+        organism.organism_id,
+        SubmitSignalRequest(type="contract.call", payload={"contract": "BlockedContract", "action": "read"}),
+    )
+
+    assert first is not None and first.structure_request is not None
+    assert second is not None and second.structure_request is not None
+    requests = list_structure_requests()
+    assert len(requests) == 2
+
+    resolved = resolve_structure_request(first.structure_request.request_id, ResolveStructureRequestRequest(contract_id="contract-new"))
+    blocked = block_structure_request(second.structure_request.request_id, BlockStructureRequestRequest(reason="not approved"))
+
+    assert resolved is not None
+    assert resolved.status == "resolved"
+    assert blocked is not None
+    assert blocked.status == "blocked"
+    assert blocked.reason == "not approved"
+
+
+def test_genome_validation_requires_deterministic_tool():
+    genome = Genome(
+        genome_id="genome-test",
+        modules=[GenomeModule(module_id="bad", signal_types=["calculate"], execution_strategy="deterministic_tool")],
+    )
+
+    response = validate_genome(genome)
+
+    assert response.report.valid is False
+    assert response.report.errors == ["bad requires deterministic_tool"]
+
+
+def test_v3_birth_growth_and_division_runtime_flow():
+    mother = create_organism(CreateOrganismRequest(goals=["preserve memory"]))
+    father = create_organism(CreateOrganismRequest(goals=["optimize reasoning"]))
+    zygote = create_zygote(CreateZygoteRequest(mother_organism_id=mother.organism_id, father_organism_id=father.organism_id))
+
+    assert zygote is not None
+    child = birth_zygote(zygote.zygote_id)
+    assert child is not None
+    detail = get_organism_detail(child.organism_id)
+    assert detail is not None
+    assert detail.organism.growth_state["zygote_id"] == zygote.zygote_id
+    assert len(detail.cells) == 22
+
+    growth = apply_growth_template(child.organism_id, ApplyGrowthTemplateRequest())
+    assert growth is not None
+    brain_cell = next(cell for cell in detail.cells if cell.organ_id == "brain")
+    division = divide_cell(child.organism_id, brain_cell.cell_id, DivideCellRequest())
+    assert division is not None
+    daughters = [cell for cell in RUNTIME.stores.cells[child.organism_id] if cell.parent_cell_id == brain_cell.cell_id]
+    assert len(daughters) == 2
+    assert {cell.cell_genome_id for cell in daughters} == {brain_cell.cell_genome_id}

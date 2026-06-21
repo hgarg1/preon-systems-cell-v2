@@ -81,6 +81,23 @@
   --sidebar-accent-foreground: oklch(0.96 0.02 155);
   --sidebar-border: oklch(1 0 0 / 12%);
   --sidebar-ring: oklch(0.74 0.15 155);
+
+  /* Organelle identity colors */
+  --organelle-membrane:     #0ea5e9;
+  --organelle-cytoplasm:    #64748b;
+  --organelle-nucleus:      #8b5cf6;
+  --organelle-mitochondria: #f59e0b;
+  --organelle-ribosome:     #10b981;
+  --organelle-protein:      #a855f7;
+  --organelle-golgi:        #f97316;
+  --organelle-skeleton:     #ec4899;
+  --organelle-peroxisome:   #ef4444;
+
+  /* Organism lifecycle colors */
+  --lifecycle-active:     #22c55e;
+  --lifecycle-hibernated: #eab308;
+  --lifecycle-degraded:   #f97316;
+  --lifecycle-terminated: #ef4444;
 }
 
 @layer base {

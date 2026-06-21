@@ -1,4 +1,4 @@
-from preon_systems_cell.telemetry.collector import TelemetryCollector
-from preon_systems_cell.telemetry.sinks import InMemoryTelemetrySink, TelemetrySink
+from preon_systems_cell.telemetry.collector import RuntimeTelemetryCollector
+from preon_systems_cell.telemetry.sinks import InMemoryRuntimeTelemetrySink, RuntimeTelemetrySink
 
-__all__ = ["InMemoryTelemetrySink", "TelemetryCollector", "TelemetrySink"]
+__all__ = ["InMemoryRuntimeTelemetrySink", "RuntimeTelemetryCollector", "RuntimeTelemetrySink"]

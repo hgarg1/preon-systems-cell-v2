@@ -2,41 +2,37 @@ from __future__ import annotations
 
 import argparse
 import json
-from pathlib import Path
 
-from preon_systems_cell.api import load_scenario, run_simulation, validate_scenario
-from preon_systems_cell.artifacts import read_json, read_run_artifacts
-from preon_systems_cell.bi import BI_EXPORT_FORMATS, write_bi_bundle
-from preon_systems_cell.models import ValidationReport
-from preon_systems_cell.scenario import validate_scenario_file
+from preon_systems_cell.api import create_contract, create_organism, get_organism_detail, list_contracts, submit_signal, validate_genome
+from preon_systems_cell.models import CreateContractRequest, CreateOrganismRequest, Genome, IdentityProfile, SubmitSignalRequest
 from preon_systems_cell.web import main as run_web_server
 
 
 def build_parser() -> argparse.ArgumentParser:
-    parser = argparse.ArgumentParser(prog="simulate", description="Run glucose-centric cell simulations.")
+    parser = argparse.ArgumentParser(prog="organism", description="Operate the Preon deterministic organism runtime.")
     subparsers = parser.add_subparsers(dest="command", required=True)
 
-    validate_parser = subparsers.add_parser("validate", help="Validate a scenario YAML file.")
-    validate_parser.add_argument("scenario", type=Path)
+    create_parser = subparsers.add_parser("create-organism", help="Create a hibernated organism identity.")
+    create_parser.add_argument("--name", default="Preon Organism")
+    create_parser.add_argument("--purpose", default="Deterministic organism runtime")
+    create_parser.add_argument("--goal", action="append", default=[])
 
-    run_parser = subparsers.add_parser("run", help="Run a simulation and optionally write artifacts.")
-    run_parser.add_argument("scenario", type=Path)
-    run_parser.add_argument("--seed", type=int, required=True)
-    run_parser.add_argument("--max-steps", type=int, default=None)
-    run_parser.add_argument("--dt", type=float, default=None)
-    run_parser.add_argument("--out", type=Path, default=None)
+    signal_parser = subparsers.add_parser("submit-signal", help="Submit a signal to an organism.")
+    signal_parser.add_argument("organism_id")
+    signal_parser.add_argument("--type", required=True)
+    signal_parser.add_argument("--payload", default="{}")
 
-    inspect_parser = subparsers.add_parser("inspect", help="Inspect a generated JSON artifact.")
-    inspect_parser.add_argument("artifact", type=Path)
+    inspect_parser = subparsers.add_parser("inspect-organism", help="Inspect organism state.")
+    inspect_parser.add_argument("organism_id")
 
-    export_parser = subparsers.add_parser("export-bi", help="Write native BI exports and Parquet for a run directory.")
-    export_parser.add_argument("--run-dir", type=Path, required=True)
-    export_parser.add_argument("--out", type=Path, required=True)
-    export_parser.add_argument(
-        "--formats",
-        default=",".join(BI_EXPORT_FORMATS),
-        help="Comma-separated export formats: parquet,powerbi,tableau",
-    )
+    contract_parser = subparsers.add_parser("create-contract", help="Register a skeletal-layer contract.")
+    contract_parser.add_argument("--name", required=True)
+    contract_parser.add_argument("--action", action="append", default=[])
+
+    subparsers.add_parser("list-contracts", help="List registered contracts.")
+
+    genome_parser = subparsers.add_parser("validate-genome", help="Validate a genome JSON payload.")
+    genome_parser.add_argument("--json", required=True)
 
     web_parser = subparsers.add_parser("web", help="Run the FastAPI web server.")
     web_parser.add_argument("--host", default="127.0.0.1")
@@ -45,65 +41,48 @@ def build_parser() -> argparse.ArgumentParser:
 
 
 def main(argv: list[str] | None = None) -> int:
-    parser = build_parser()
-    args = parser.parse_args(argv)
+    args = build_parser().parse_args(argv)
 
-    if args.command == "validate":
-        report = validate_scenario_file(args.scenario)
-        return _emit_validation_report(report)
-
-    if args.command == "run":
-        scenario = load_scenario(args.scenario)
-        report = validate_scenario(scenario)
-        if not report.valid:
-            return _emit_validation_report(report)
-        artifacts = run_simulation(
-            scenario=scenario,
-            seed=args.seed,
-            max_steps=args.max_steps,
-            dt=args.dt,
-            output_dir=args.out,
+    if args.command == "create-organism":
+        organism = create_organism(
+            CreateOrganismRequest(identity_profile=IdentityProfile(name=args.name, purpose=args.purpose), goals=args.goal)
         )
-        final_metrics = artifacts.metrics[-1]
-        summary = {
-            "run_id": artifacts.metadata.run_id,
-            "scenario": artifacts.metadata.scenario_name,
-            "seed": artifacts.metadata.seed,
-            "steps_completed": artifacts.final_state.step,
-            "termination_reason": artifacts.termination_reason.value,
-            "population_count": final_metrics.population_count,
-            "alive_count": final_metrics.alive_count,
-            "dead_count": final_metrics.dead_count,
-            "divided_count": final_metrics.divided_count,
-            "total_atp": round(final_metrics.total_atp, 4),
-            "total_biomass": round(final_metrics.total_biomass, 4),
-        }
-        print(json.dumps(summary, indent=2, sort_keys=True))
+        print(json.dumps({"organism": organism.model_dump(mode="json")}, indent=2, sort_keys=True))
         return 0
 
-    if args.command == "inspect":
-        print(json.dumps(read_json(args.artifact), indent=2, sort_keys=True))
-        return 0
-
-    if args.command == "export-bi":
-        try:
-            artifacts = read_run_artifacts(args.run_dir)
-            formats = [item.strip() for item in args.formats.split(",") if item.strip()]
-            manifest = write_bi_bundle(artifacts, args.out, formats=formats)
-        except (FileNotFoundError, RuntimeError, ValueError) as exc:
-            print(json.dumps({"error": str(exc)}, indent=2, sort_keys=True))
+    if args.command == "submit-signal":
+        payload = json.loads(args.payload)
+        response = submit_signal(args.organism_id, SubmitSignalRequest(type=args.type, payload=payload))
+        if response is None:
+            print(json.dumps({"error": "organism not found"}, indent=2, sort_keys=True))
             return 1
-        print(json.dumps(manifest.model_dump(mode="json"), indent=2, sort_keys=True))
+        print(json.dumps(response.model_dump(mode="json"), indent=2, sort_keys=True))
         return 0
+
+    if args.command == "inspect-organism":
+        detail = get_organism_detail(args.organism_id)
+        if detail is None:
+            print(json.dumps({"error": "organism not found"}, indent=2, sort_keys=True))
+            return 1
+        print(json.dumps(detail.model_dump(mode="json"), indent=2, sort_keys=True))
+        return 0
+
+    if args.command == "create-contract":
+        contract = create_contract(CreateContractRequest(name=args.name, allowed_actions=args.action))
+        print(json.dumps({"contract": contract.model_dump(mode="json")}, indent=2, sort_keys=True))
+        return 0
+
+    if args.command == "list-contracts":
+        print(json.dumps({"contracts": [contract.model_dump(mode="json") for contract in list_contracts()]}, indent=2, sort_keys=True))
+        return 0
+
+    if args.command == "validate-genome":
+        response = validate_genome(Genome.model_validate(json.loads(args.json)))
+        print(json.dumps(response.model_dump(mode="json"), indent=2, sort_keys=True))
+        return 0 if response.report.valid else 1
 
     if args.command == "web":
         run_web_server(host=args.host, port=args.port)
         return 0
 
-    parser.error(f"unsupported command: {args.command}")
     return 2
-
-
-def _emit_validation_report(report: ValidationReport) -> int:
-    print(json.dumps(report.model_dump(mode="json"), indent=2, sort_keys=True))
-    return 0 if report.valid else 1

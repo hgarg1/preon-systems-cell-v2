@@ -1,0 +1,22 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64">
+  <defs>
+    <linearGradient id="bg" x1="8" y1="6" x2="56" y2="58" gradientUnits="userSpaceOnUse">
+      <stop offset="0" stop-color="#34d399"/>
+      <stop offset="0.52" stop-color="#38bdf8"/>
+      <stop offset="1" stop-color="#0f172a"/>
+    </linearGradient>
+    <linearGradient id="core" x1="20" y1="17" x2="45" y2="47" gradientUnits="userSpaceOnUse">
+      <stop offset="0" stop-color="#ecfeff"/>
+      <stop offset="1" stop-color="#a7f3d0"/>
+    </linearGradient>
+  </defs>
+  <rect width="64" height="64" rx="14" fill="#020617"/>
+  <path d="M12 14c0-2.2 1.8-4 4-4h32c2.2 0 4 1.8 4 4v36c0 2.2-1.8 4-4 4H16c-2.2 0-4-1.8-4-4V14Z" fill="url(#bg)"/>
+  <path d="M20 45V28" stroke="#0f172a" stroke-width="5" stroke-linecap="round"/>
+  <path d="M32 45V20" stroke="#0f172a" stroke-width="5" stroke-linecap="round"/>
+  <path d="M44 45V33" stroke="#0f172a" stroke-width="5" stroke-linecap="round"/>
+  <path d="M18 45h30" stroke="#ecfeff" stroke-width="4" stroke-linecap="round"/>
+  <circle cx="20" cy="28" r="5" fill="url(#core)"/>
+  <circle cx="32" cy="20" r="5" fill="url(#core)"/>
+  <circle cx="44" cy="33" r="5" fill="url(#core)"/>
+</svg>

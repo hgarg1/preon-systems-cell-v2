@@ -1,481 +1,927 @@
 from __future__ import annotations
 
+import asyncio
 from contextlib import asynccontextmanager
-from datetime import UTC, datetime
 import json
-import logging
+import os
 from pathlib import Path
-from random import Random
-import tempfile
+import urllib.parse
+import urllib.request
 
-from fastapi import FastAPI, HTTPException
-from fastapi import Query, WebSocket
-from fastapi import WebSocketDisconnect
-from fastapi.responses import FileResponse
+try:
+    from dotenv import load_dotenv
+    load_dotenv(Path(__file__).resolve().parents[1] / ".env", override=False)
+except ImportError:
+    pass
+
+from fastapi import Depends, FastAPI, HTTPException, Request, Response
+from fastapi.responses import FileResponse, JSONResponse, RedirectResponse
 from fastapi.staticfiles import StaticFiles
-from pydantic import BaseModel, Field, ValidationError
+from pydantic import BaseModel
 
-from preon_systems_cell.analytics.comparison import compare_runs
-from preon_systems_cell.analytics.intelligence import summarize_run_intelligence
-from preon_systems_cell.analytics.series import build_time_series
-from preon_systems_cell.api import _new_run_id, _scenario_hash, create_cell, run_simulation, step_simulation, step_simulation_api, validate_scenario
-from preon_systems_cell.bi import BI_EXPORT_FORMATS, describe_export_formats, read_export_manifest, write_bi_bundle, write_export_zip
-from preon_systems_cell.domain.runs import RunRecord, RunStatus
-from preon_systems_cell.engine import ENGINE_VERSION, initial_state_for_scenario
+from preon_systems_cell.api import (
+    ENGINE_VERSION,
+    RUNTIME,
+    activate_genome_version,
+    add_food,
+    apply_growth_template,
+    birth_zygote,
+    block_structure_request,
+    create_capability,
+    create_bone_proposal,
+    create_cell,
+    create_contract,
+    create_genome_version,
+    create_memory,
+    create_organism,
+    create_review,
+    create_zygote,
+    debug_bundle,
+    deprecate_contract,
+    deprecate_memory,
+    decide_review,
+    decide_structure_proposal,
+    develop_zygote,
+    die_organism,
+    check_cell_division_readiness,
+    divide_cell,
+    export_organism,
+    get_genome,
+    get_memory,
+    get_organism_detail,
+    get_soul,
+    get_zygote,
+    grant_oxygen,
+    growth_template,
+    health_report,
+    get_policies,
+    hibernate_organism,
+    hibernate_cell,
+    import_organism,
+    list_bones,
+    list_contracts,
+    list_capabilities,
+    list_cells,
+    list_cell_divisions,
+    list_events,
+    list_genome_versions,
+    list_genomes,
+    list_memory,
+    list_organisms,
+    list_organs,
+    list_reviews,
+    list_souls,
+    list_structure_proposals,
+    list_structure_requests,
+    list_tissues,
+    list_zygotes,
+    maintenance_status,
+    mark_cell_dead,
+    negotiate_reproduction,
+    preview_genome,
+    replay_signal,
+    reincarnate_soul,
+    resolve_structure_request,
+    run_maintenance,
+    runtime_metrics,
+    self_consume_cell,
+    simulate_policy,
+    submit_signal,
+    test_contract_adapter,
+    update_cell,
+    update_genome_division_policy,
+    update_policies,
+    validate_genome,
+    validate_contract_adapter,
+    validate_policies,
+    wake_organism,
+)
+from preon_systems_cell.email import (
+    password_reset_email,
+    send_email,
+    verification_email,
+)
+from preon_systems_cell.auth import (
+    AuthSessionResponse,
+    AuthUser,
+    ForgotPasswordRequest,
+    ForgotPasswordResponse,
+    InMemoryAuthRepository,
+    LoginRequest,
+    OAuthProviderResponse,
+    PasswordPolicyResponse,
+    ResetPasswordRequest,
+    SESSION_COOKIE_NAME,
+    SignupRequest,
+    VerifyEmailRequest,
+    auth_url,
+    check_rate_limit,
+    clear_session_cookie,
+    frontend_base_url,
+    hash_password,
+    oauth_authorization_url,
+    password_policy_errors,
+    require_csrf,
+    require_current_user,
+    session_expires_at,
+    set_session_cookie,
+    token_expires_at,
+    verify_password,
+)
 from preon_systems_cell.models import (
-    CellCreateParams,
-    CellCreateResponse,
-    Event,
-    EventType,
-    RunComparisonResponse,
-    RunArtifacts,
-    RunIntelligence,
-    RunTimeSeriesResponse,
-    Scenario,
-    ValidationReport,
-    WorldState,
-    TerminationReason,
+    AdapterTestRequest,
+    Actor,
+    ApplyGrowthTemplateRequest,
+    BlockStructureRequestRequest,
+    CreateBoneProposalRequest,
+    CreateCapabilityRequest,
+    CreateCellRequest,
+    CreateContractRequest,
+    CreateGenomeVersionRequest,
+    CreateMemoryRequest,
+    CreateOrganismRequest,
+    CreateReviewRequest,
+    CreateZygoteRequest,
+    DecideProposalRequest,
+    DecideReviewRequest,
+    DevelopZygoteRequest,
+    DivideCellRequest,
+    FoodIntakeRequest,
+    Genome,
+    GenomePreviewRequest,
+    HealthResponse,
+    OxygenGrantRequest,
+    PolicySimulationRequest,
+    PolicyUpdateRequest,
+    ReproductionNegotiateRequest,
+    ResolveStructureRequestRequest,
+    SubmitSignalRequest,
+    UpdateCellRequest,
+    UpdateDivisionPolicyRequest,
 )
 from preon_systems_cell.storage.manager import StorageManager
-from preon_systems_cell.storage.postgres import PostgresRunStore, PostgresSettings, PostgresUnavailableError
-from preon_systems_cell.storage.repositories import GLOBAL_RUN_REPOSITORY, InMemoryRunRepository
 
 
 APP_DIR = Path(__file__).resolve().parent
 STATIC_DIR = APP_DIR / "static"
-DEFAULT_SCENARIO_PATH = APP_DIR.parent / "scenarios" / "default_cell.yaml"
-logger = logging.getLogger("preon_systems_cell.web")
 
 
-class StepRequest(BaseModel):
-    scenario: Scenario
-    state: WorldState | None = None
-    seed: int = Field(default=7)
-    dt: float | None = Field(default=None, gt=0)
+class GenomeValidationRequest(BaseModel):
+    genome: Genome
 
 
-class RunRequest(BaseModel):
-    scenario: Scenario
-    seed: int = Field(default=7)
-    max_steps: int | None = Field(default=None, gt=0)
-    dt: float | None = Field(default=None, gt=0)
-
-
-class CreateCellRequest(BaseModel):
-    scenario: Scenario
-    cell: CellCreateParams | None = None
-
-
-class ExportRequest(BaseModel):
-    formats: list[str] = Field(default_factory=lambda: ["parquet", "powerbi", "tableau"])
+class OAuthCallbackRequest(BaseModel):
+    code: str
+    state: str | None = None
 
 
 def create_app() -> FastAPI:
     @asynccontextmanager
     async def lifespan(app: FastAPI):
-        app.state.storage = await StorageManager.create(
-            settings=PostgresSettings.from_env(),
-            memory=GLOBAL_RUN_REPOSITORY,
-        )
+        manager = await StorageManager.create()
+        app.state.storage = manager
+        app.state.auth = manager.auth
+        if manager.postgres is not None:
+            RUNTIME.stores = await manager.postgres.load_stores()
+            RUNTIME._bind_services()
         try:
             yield
         finally:
-            await _storage_manager(app).close()
+            await manager.close()
 
     app = FastAPI(
-        title="Preon Systems Cell API",
+        title="Preon Systems Organism Runtime API",
         version=ENGINE_VERSION,
-        description="HTTP API and small web UI for the deterministic glucose-centric cell simulator.",
+        description="Deterministic organism runtime with membrane admission, ribosome routing, proteins, and contracts.",
         lifespan=lifespan,
     )
-    app.state.run_update_clients = set()
+    app.state.auth = InMemoryAuthRepository()
     app.mount("/static", StaticFiles(directory=STATIC_DIR), name="static")
 
-    @app.get("/health")
-    def health() -> dict[str, object]:
-        storage = _storage_manager(app)
-        return {"status": "ok", "engine_version": ENGINE_VERSION, "storage": storage.status.model_dump()}
-
-    @app.get("/api/default-scenario")
-    def get_default_scenario() -> dict[str, object]:
-        scenario = _load_default_scenario()
-        return {"scenario": scenario.model_dump(mode="json")}
-
-    @app.post("/api/validate", response_model=ValidationReport)
-    def validate(request: RunRequest) -> ValidationReport:
-        return validate_scenario(request.scenario)
-
-    @app.post("/api/cells", response_model=CellCreateResponse)
-    def create_cell_route(request: CreateCellRequest) -> CellCreateResponse:
-        report = validate_scenario(request.scenario)
-        if not report.valid:
-            raise HTTPException(status_code=422, detail=report.errors)
+    @app.middleware("http")
+    async def csrf_middleware(request: Request, call_next):
         try:
-            return create_cell(request.scenario, request.cell)
-        except ValidationError as exc:
-            raise HTTPException(status_code=422, detail=[err["msg"] for err in exc.errors()]) from exc
+            require_csrf(request)
+        except HTTPException as exc:
+            return JSONResponse(status_code=exc.status_code, content={"detail": exc.detail})
+        return await call_next(request)
 
-    @app.post("/api/step")
-    def step(request: StepRequest) -> dict[str, object]:
-        report = validate_scenario(request.scenario)
-        if not report.valid:
-            raise HTTPException(status_code=422, detail=report.errors)
-
-        state = request.state or initial_state_for_scenario(request.scenario)
-        transition = step_simulation(
-            state=state,
-            dt=request.dt or request.scenario.simulation.dt,
-            rng=Random(request.seed),
-            scenario=request.scenario,
+    @app.get("/health", response_model=HealthResponse)
+    def health() -> HealthResponse:
+        storage = getattr(app.state, "storage", None)
+        storage_status = (
+            storage.status.model_dump()
+            if storage is not None
+            else {"mode": "memory", "primary": "postgres", "fallback": "memory", "degraded": True}
         )
-        return transition.model_dump(mode="json")
-
-    @app.post("/api/run")
-    async def run(request: RunRequest) -> dict[str, object]:
-        run_record, artifacts = await _create_materialized_run(app, request)
-        await _broadcast_run_created(app, run_record)
-        return artifacts.model_dump(mode="json")
-
-    @app.get("/api/runs")
-    async def list_runs() -> dict[str, object]:
-        storage = _storage_manager(app)
-        if storage.postgres is not None:
-            runs = await storage.postgres.list_runs()
-        else:
-            runs = storage.memory.list_runs()
-        return {"runs": [run.model_dump(mode="json") for run in runs]}
-
-    @app.post("/api/runs")
-    async def create_run(request: RunRequest) -> dict[str, object]:
-        run_record, artifacts = await _create_materialized_run(app, request)
-        await _broadcast_run_created(app, run_record)
-        return {
-            "run": run_record.model_dump(mode="json"),
-            "final_state": artifacts.final_state.model_dump(mode="json"),
-            "termination_reason": artifacts.termination_reason.value,
-        }
-
-    @app.post("/runs/start")
-    async def start_persisted_run(request: RunRequest) -> dict[str, object]:
-        store = _postgres_store(app)
-        report = validate_scenario(request.scenario)
-        if not report.valid:
-            raise HTTPException(status_code=422, detail=report.errors)
-        scenario = _effective_scenario(request.scenario, request.dt)
-        max_steps = request.max_steps if request.max_steps is not None else scenario.simulation.max_steps
-        run_record = RunRecord(
-            run_id=_new_run_id(),
-            scenario_name=scenario.scenario_name,
-            scenario_hash=_scenario_hash(scenario),
-            seed=request.seed,
-            status=RunStatus.RUNNING,
-            started_at=datetime.now(UTC),
-            max_steps=max_steps,
+        return HealthResponse(
+            status="ok",
+            runtime="organism",
+            storage=storage_status,
         )
-        state = initial_state_for_scenario(scenario)
-        rng = Random(request.seed)
-        await store.start_run(run_record, scenario, state, rng)
-        return {"run": run_record.model_dump(mode="json"), "state": state.model_dump(mode="json")}
 
-    @app.post("/runs/{run_id}/step")
-    async def step_persisted_run(run_id: str) -> dict[str, object]:
-        store = _postgres_store(app)
-        context = await store.load_run_context(run_id)
-        if context is None:
-            raise HTTPException(status_code=404, detail="run not found")
-        if context.run.status != RunStatus.RUNNING:
-            raise HTTPException(status_code=409, detail=f"run is {context.run.status.value}")
+    @app.get("/auth/password-policy", response_model=PasswordPolicyResponse)
+    async def get_password_policy() -> PasswordPolicyResponse:
+        return PasswordPolicyResponse(policy=await _auth_repository(app).get_password_policy())
 
-        transition = step_simulation_api(context.state, context.scenario, context.rng)
-        termination_reason = transition.termination_reason
-        completed = transition.terminated
-        events = list(transition.events)
-        if not completed and transition.state.step >= context.run.max_steps:
-            termination_reason = TerminationReason.MAX_STEPS_REACHED
-            completed = True
-            events.append(
-                Event(
-                    step=transition.state.step,
-                    time=transition.state.time,
-                    type=EventType.TERMINATION,
-                    message="Simulation terminated after reaching max steps",
-                    values={"reason": termination_reason.value},
-                )
-            )
-            transition = transition.model_copy(
-                update={"events": events, "terminated": True, "termination_reason": termination_reason}
-            )
-
-        next_run = context.run.model_copy(
-            update={
-                "status": RunStatus.COMPLETED if completed else RunStatus.RUNNING,
-                "completed_at": datetime.now(UTC) if completed else None,
-                "final_step": transition.state.step if completed else None,
-                "termination_reason": termination_reason.value if termination_reason else None,
-            }
-        )
-        await store.append_step(next_run, transition, context.rng)
-        return {"run": next_run.model_dump(mode="json"), "transition": transition.model_dump(mode="json")}
-
-    @app.get("/runs/{run_id}/metrics")
-    async def get_persisted_metrics(
-        run_id: str,
-        from_step: int = Query(default=0, ge=0),
-        to_step: int | None = Query(default=None, ge=0),
-        resolution: int = Query(default=1, ge=1),
-    ) -> dict[str, object]:
-        _validate_step_window(from_step, to_step)
-        store = _postgres_store(app)
-        if not await store.run_exists(run_id):
-            raise HTTPException(status_code=404, detail="run not found")
-        return {
-            "run_id": run_id,
-            "resolution": resolution,
-            "series": await store.get_metrics(run_id, from_step, to_step, resolution),
-        }
-
-    @app.get("/runs/{run_id}/cells")
-    async def get_persisted_cells(run_id: str) -> dict[str, object]:
-        store = _postgres_store(app)
-        cells = await store.get_cells(run_id)
-        if cells is None:
-            raise HTTPException(status_code=404, detail="run not found")
-        return {"run_id": run_id, "cells": cells}
-
-    @app.get("/runs/{run_id}/events")
-    async def get_persisted_events(
-        run_id: str,
-        cell_id: str | None = None,
-        from_step: int = Query(default=0, ge=0),
-        to_step: int | None = Query(default=None, ge=0),
-        event_type: str | None = None,
-        limit: int = Query(default=5000, ge=1, le=50000),
-    ) -> dict[str, object]:
-        _validate_step_window(from_step, to_step)
-        store = _postgres_store(app)
-        events = await store.get_events(run_id, cell_id, from_step, to_step, event_type, limit)
-        if events is None:
-            raise HTTPException(status_code=404, detail="run not found")
-        return {"run_id": run_id, "events": events}
-
-    @app.get("/api/runs/compare", response_model=RunComparisonResponse)
-    async def compare_run_set(
-        runs: str = Query(..., min_length=1),
-        resolution: int = Query(default=1, ge=1),
-        from_step: int = Query(default=0, ge=0),
-        to_step: int | None = Query(default=None, ge=0),
-    ) -> RunComparisonResponse:
-        _validate_step_window(from_step, to_step)
-        run_ids = _parse_compare_run_ids(runs)
-        if len(run_ids) < 2:
-            raise HTTPException(status_code=422, detail="compare requires at least two unique runs")
-        if len(run_ids) > 8:
-            raise HTTPException(status_code=422, detail="compare supports at most 8 runs")
-        storage = _storage_manager(app)
-        pairs = []
-        for run_id in run_ids:
-            if storage.postgres is not None:
-                run_record = await storage.postgres.get_run(run_id)
-                artifacts = await storage.postgres.get_artifacts(run_id)
-            else:
-                run_record = storage.memory.get_run(run_id)
-                artifacts = storage.memory.get_artifacts(run_id)
-            if run_record is None or artifacts is None:
-                raise HTTPException(status_code=404, detail=f"run not found: {run_id}")
-            pairs.append((run_record, artifacts))
-        return compare_runs(pairs, resolution=resolution, from_step=from_step, to_step=to_step)
-
-    @app.websocket("/api/runs/updates")
-    async def stream_run_updates(websocket: WebSocket) -> None:
-        await websocket.accept()
-        clients = _run_update_clients(app)
-        clients.add(websocket)
+    @app.post("/auth/signup", response_model=AuthSessionResponse)
+    async def signup(request: Request, response: Response, payload: SignupRequest) -> AuthSessionResponse:
+        check_rate_limit(f"signup:{payload.email}")
+        auth = _auth_repository(app)
+        if payload.confirm_password is not None and payload.confirm_password != payload.password:
+            raise HTTPException(status_code=422, detail="passwords do not match")
+        policy_errors = password_policy_errors(payload.password, await auth.get_password_policy())
+        if policy_errors:
+            raise HTTPException(status_code=422, detail=policy_errors)
         try:
-            while True:
-                await websocket.receive_text()
-        except WebSocketDisconnect:
-            clients.discard(websocket)
-        except Exception:
-            clients.discard(websocket)
+            user = await auth.create_user(payload.email, hash_password(payload.password), payload.name)
+        except ValueError as exc:
+            raise HTTPException(status_code=409, detail=str(exc)) from exc
+        token = await auth.create_session(user.id, session_expires_at())
+        verification_token = await auth.create_email_verification_token(user.id, token_expires_at())
+        set_session_cookie(response, token)
+        verification_url = auth_url(request, "/verify-email", verification_token)
+        sent = await send_email(user.email, *verification_email(verification_url))
+        return AuthSessionResponse(user=user.public(), email_verification_url=None if sent else verification_url)
 
-    @app.get("/api/runs/{run_id}")
-    async def get_run(run_id: str) -> dict[str, object]:
-        run_record = await _get_run_record(app, run_id)
-        if run_record is None:
-            raise HTTPException(status_code=404, detail="run not found")
-        return {"run": run_record.model_dump(mode="json")}
+    @app.post("/auth/login", response_model=AuthSessionResponse)
+    async def login(response: Response, payload: LoginRequest) -> AuthSessionResponse:
+        check_rate_limit(f"login:{payload.email}")
+        auth = _auth_repository(app)
+        user = await auth.get_user_by_email(payload.email)
+        if user is None or not verify_password(payload.password, user.password_hash):
+            raise HTTPException(status_code=401, detail="invalid email or password")
+        token = await auth.create_session(user.id, session_expires_at())
+        set_session_cookie(response, token)
+        return AuthSessionResponse(user=user.public())
 
-    @app.post("/api/runs/{run_id}/start")
-    async def start_run(run_id: str) -> dict[str, object]:
-        run_record = await _get_run_record(app, run_id)
-        if run_record is None:
-            raise HTTPException(status_code=404, detail="run not found")
-        return {"run": run_record.model_dump(mode="json")}
+    @app.post("/auth/logout")
+    async def logout(request: Request, response: Response) -> dict[str, bool]:
+        token = request.cookies.get(SESSION_COOKIE_NAME)
+        if token:
+            await _auth_repository(app).delete_session(token)
+        clear_session_cookie(response)
+        return {"ok": True}
 
-    @app.post("/api/runs/{run_id}/cancel")
-    async def cancel_run(run_id: str) -> dict[str, object]:
-        run_record = await _get_run_record(app, run_id)
-        if run_record is None:
-            raise HTTPException(status_code=404, detail="run not found")
-        return {"run": run_record.model_dump(mode="json"), "cancelled": False, "reason": "run already materialized"}
+    @app.get("/auth/me")
+    async def me(request: Request, response: Response, user: AuthUser = Depends(require_current_user)) -> dict[str, object]:
+        response.headers["Cache-Control"] = "no-store"
+        token = request.cookies.get(SESSION_COOKIE_NAME)
+        if token:
+            refreshed = await _auth_repository(app).refresh_session(token)
+            if refreshed:
+                set_session_cookie(response, token)
+        return {"user": user.public().model_dump(mode="json")}
 
-    @app.get("/api/runs/{run_id}/metrics")
-    async def get_run_metrics(
-        run_id: str,
-        from_step: int = Query(default=0, ge=0),
-        to_step: int | None = Query(default=None, ge=0),
-        resolution: int = Query(default=1, ge=1),
-    ) -> dict[str, object]:
-        _validate_step_window(from_step, to_step)
-        storage = _storage_manager(app)
-        if await _get_run_record(app, run_id) is None:
-            raise HTTPException(status_code=404, detail="run not found")
-        if storage.postgres is not None:
-            series = await storage.postgres.get_metrics(run_id, from_step, to_step, resolution)
-        else:
-            series = storage.memory.get_metrics(run_id, from_step, to_step, resolution)
-        return {
-            "run_id": run_id,
-            "resolution": resolution,
-            "series": series,
-        }
+    @app.post("/auth/forgot-password", response_model=ForgotPasswordResponse)
+    async def forgot_password(request: Request, payload: ForgotPasswordRequest) -> ForgotPasswordResponse:
+        auth = _auth_repository(app)
+        user = await auth.get_user_by_email(payload.email)
+        if user is None:
+            return ForgotPasswordResponse(ok=True)
+        reset_token = await auth.create_password_reset_token(user.id, token_expires_at())
+        reset_url = auth_url(request, "/reset-password", reset_token)
+        sent = await send_email(user.email, *password_reset_email(reset_url))
+        return ForgotPasswordResponse(ok=True, reset_url=None if sent else reset_url)
 
-    @app.get("/api/runs/{run_id}/timeseries", response_model=RunTimeSeriesResponse)
-    async def get_run_timeseries(
-        run_id: str,
-        from_step: int = Query(default=0, ge=0),
-        to_step: int | None = Query(default=None, ge=0),
-        resolution: int = Query(default=1, ge=1),
-    ) -> RunTimeSeriesResponse:
-        _validate_step_window(from_step, to_step)
-        artifacts = await _get_run_artifacts(app, run_id)
-        if artifacts is None:
-            raise HTTPException(status_code=404, detail="run not found")
-        return RunTimeSeriesResponse(
-            run_id=run_id,
-            resolution=resolution,
-            points=build_time_series(artifacts, from_step=from_step, to_step=to_step, resolution=resolution),
-        )
+    @app.post("/auth/reset-password")
+    async def reset_password(payload: ResetPasswordRequest) -> dict[str, bool]:
+        auth = _auth_repository(app)
+        policy_errors = password_policy_errors(payload.password, await auth.get_password_policy())
+        if policy_errors:
+            raise HTTPException(status_code=422, detail=policy_errors)
+        user = await auth.consume_password_reset_token(payload.token)
+        if user is None:
+            raise HTTPException(status_code=400, detail="invalid or expired reset token")
+        await auth.update_password(user.id, hash_password(payload.password))
+        await auth.delete_sessions_for_user(user.id)
+        return {"ok": True}
 
-    @app.get("/api/runs/{run_id}/intelligence", response_model=RunIntelligence)
-    async def get_run_intelligence(run_id: str) -> RunIntelligence:
-        artifacts = await _get_run_artifacts(app, run_id)
-        if artifacts is None:
-            raise HTTPException(status_code=404, detail="run not found")
-        return summarize_run_intelligence(artifacts)
+    @app.post("/auth/verify-email", response_model=AuthSessionResponse)
+    async def verify_email(payload: VerifyEmailRequest) -> AuthSessionResponse:
+        user = await _auth_repository(app).consume_email_verification_token(payload.token)
+        if user is None:
+            raise HTTPException(status_code=400, detail="invalid or expired verification token")
+        return AuthSessionResponse(user=user.public())
 
-    @app.get("/api/runs/{run_id}/lineage")
-    async def get_lineage(run_id: str, root: str | None = None) -> dict[str, object]:
-        storage = _storage_manager(app)
-        if await _get_run_record(app, run_id) is None:
-            raise HTTPException(status_code=404, detail="run not found")
-        if root is not None and await _get_cell_state(app, run_id, root) is None:
+    @app.get("/auth/oauth/{provider}", response_model=OAuthProviderResponse)
+    async def oauth_start(provider: str) -> OAuthProviderResponse:
+        if provider not in {"google", "microsoft"}:
+            raise HTTPException(status_code=404, detail="unknown OAuth provider")
+        url = oauth_authorization_url(provider)
+        return OAuthProviderResponse(provider=provider, configured=url is not None, authorization_url=url)
+
+    @app.post("/auth/oauth/{provider}/callback", response_model=AuthSessionResponse)
+    async def oauth_callback(provider: str, payload: OAuthCallbackRequest, response: Response) -> AuthSessionResponse:
+        if provider not in {"google"}:
+            raise HTTPException(status_code=404, detail="unknown OAuth provider")
+        prefix = f"PREON_{provider.upper()}_OAUTH"
+        client_id = os.getenv(f"{prefix}_CLIENT_ID")
+        client_secret = os.getenv(f"{prefix}_CLIENT_SECRET")
+        redirect_uri = os.getenv(f"{prefix}_REDIRECT_URI")
+        token_url = os.getenv(f"{prefix}_TOKEN_URL", "https://oauth2.googleapis.com/token")
+        userinfo_url = os.getenv(f"{prefix}_USERINFO_URL", "https://www.googleapis.com/oauth2/v3/userinfo")
+        if not (client_id and client_secret and redirect_uri):
+            raise HTTPException(status_code=503, detail=f"{provider} OAuth not configured")
+        try:
+            userinfo = await asyncio.to_thread(
+                _exchange_oauth_code, client_id, client_secret, redirect_uri, payload.code, token_url, userinfo_url
+            )
+        except Exception as exc:
+            raise HTTPException(status_code=400, detail=f"OAuth exchange failed: {exc}") from exc
+        email = userinfo.get("email")
+        name = userinfo.get("name")
+        email_verified = userinfo.get("email_verified", False)
+        if not email:
+            raise HTTPException(status_code=400, detail="OAuth provider did not return an email address")
+        if not email_verified:
+            raise HTTPException(status_code=400, detail="OAuth email address is not verified by the provider")
+        auth = _auth_repository(app)
+        user = await auth.get_user_by_email(email)
+        if user is None:
+            import secrets as _sec
+            user = await auth.create_user(email, f"oauth${_sec.token_hex(32)}", name)
+            await auth.mark_email_verified(user.id)
+            user = await auth.get_user(user.id)
+        token = await auth.create_session(user.id, session_expires_at())
+        set_session_cookie(response, token)
+        return AuthSessionResponse(user=user.public())
+
+    @app.get("/reset-password")
+    def reset_password_page(request: Request) -> RedirectResponse:
+        return _redirect_to_frontend(request, "/reset-password")
+
+    @app.get("/verify-email")
+    def verify_email_page(request: Request) -> RedirectResponse:
+        return _redirect_to_frontend(request, "/verify-email")
+
+    @app.post("/api/organisms")
+    async def create_organism_route(payload: CreateOrganismRequest, user: AuthUser = Depends(require_current_user)) -> dict[str, object]:
+        organism = create_organism(payload, user.id)
+        await _persist_runtime(app)
+        return {"organism": organism.model_dump(mode="json")}
+
+    @app.get("/api/organisms")
+    async def list_organisms_route(user: AuthUser = Depends(require_current_user)) -> dict[str, object]:
+        return {"organisms": [organism.model_dump(mode="json") for organism in list_organisms(user.id)]}
+
+    @app.get("/api/organisms/{organism_id}")
+    async def get_organism_route(organism_id: str, user: AuthUser = Depends(require_current_user)) -> dict[str, object]:
+        detail = get_organism_detail(organism_id, user.id)
+        if detail is None:
+            raise HTTPException(status_code=404, detail="organism not found")
+        return detail.model_dump(mode="json")
+
+    @app.post("/api/reproduction/negotiate")
+    async def negotiate_reproduction_route(payload: ReproductionNegotiateRequest, user: AuthUser = Depends(require_current_user)) -> dict[str, object]:
+        report = negotiate_reproduction(payload, user.id)
+        if report is None:
+            raise HTTPException(status_code=404, detail="parent organism not found")
+        await _persist_runtime(app)
+        return {"negotiation": report}
+
+    @app.post("/api/reproduction/zygote")
+    async def create_zygote_route(payload: CreateZygoteRequest, user: AuthUser = Depends(require_current_user)) -> dict[str, object]:
+        zygote = create_zygote(payload, user.id)
+        if zygote is None:
+            raise HTTPException(status_code=404, detail="parent organism not found")
+        await _persist_runtime(app)
+        return {"zygote": zygote.model_dump(mode="json")}
+
+    @app.get("/api/zygotes")
+    async def list_zygotes_route(user: AuthUser = Depends(require_current_user)) -> dict[str, object]:
+        return {"zygotes": [zygote.model_dump(mode="json") for zygote in list_zygotes(user.id)]}
+
+    @app.get("/api/zygotes/{zygote_id}")
+    async def get_zygote_route(zygote_id: str, user: AuthUser = Depends(require_current_user)) -> dict[str, object]:
+        zygote = get_zygote(zygote_id, user.id)
+        if zygote is None:
+            raise HTTPException(status_code=404, detail="zygote not found")
+        return {"zygote": zygote.model_dump(mode="json")}
+
+    @app.post("/api/zygotes/{zygote_id}/develop")
+    async def develop_zygote_route(zygote_id: str, payload: DevelopZygoteRequest, user: AuthUser = Depends(require_current_user)) -> dict[str, object]:
+        zygote = develop_zygote(zygote_id, payload, user.id)
+        if zygote is None:
+            raise HTTPException(status_code=404, detail="zygote not found")
+        await _persist_runtime(app)
+        return {"zygote": zygote.model_dump(mode="json")}
+
+    @app.post("/api/zygotes/{zygote_id}/differentiate")
+    async def differentiate_zygote_route(zygote_id: str, user: AuthUser = Depends(require_current_user)) -> dict[str, object]:
+        zygote = develop_zygote(zygote_id, DevelopZygoteRequest(target_stage="fetus"), user.id)
+        if zygote is None:
+            raise HTTPException(status_code=404, detail="zygote not found")
+        await _persist_runtime(app)
+        return {"zygote": zygote.model_dump(mode="json")}
+
+    @app.post("/api/zygotes/{zygote_id}/birth")
+    async def birth_zygote_route(zygote_id: str, user: AuthUser = Depends(require_current_user)) -> dict[str, object]:
+        organism = birth_zygote(zygote_id, user.id)
+        if organism is None:
+            raise HTTPException(status_code=404, detail="zygote not found")
+        await _persist_runtime(app)
+        return {"organism": organism.model_dump(mode="json")}
+
+    @app.get("/api/growth/templates")
+    async def growth_templates_route(user: AuthUser = Depends(require_current_user)) -> dict[str, object]:
+        _ = user
+        return {"templates": {"human_minimal_v3": growth_template()}}
+
+    @app.post("/api/organisms/{organism_id}/growth/apply-template")
+    async def apply_growth_template_route(organism_id: str, payload: ApplyGrowthTemplateRequest, user: AuthUser = Depends(require_current_user)) -> dict[str, object]:
+        try:
+            result = apply_growth_template(organism_id, payload, user.id)
+        except ValueError as exc:
+            raise HTTPException(status_code=422, detail=str(exc)) from exc
+        if result is None:
+            raise HTTPException(status_code=404, detail="organism not found")
+        await _persist_runtime(app)
+        return {"growth": result}
+
+    @app.get("/api/organisms/{organism_id}/organs")
+    async def organs_route(organism_id: str, user: AuthUser = Depends(require_current_user)) -> dict[str, object]:
+        organs = list_organs(organism_id, user.id)
+        if organs is None:
+            raise HTTPException(status_code=404, detail="organism not found")
+        return {"organs": [organ.model_dump(mode="json") for organ in organs]}
+
+    @app.get("/api/organisms/{organism_id}/tissues")
+    async def tissues_route(organism_id: str, user: AuthUser = Depends(require_current_user)) -> dict[str, object]:
+        tissues = list_tissues(organism_id, user.id)
+        if tissues is None:
+            raise HTTPException(status_code=404, detail="organism not found")
+        return {"tissues": [tissue.model_dump(mode="json") for tissue in tissues]}
+
+    @app.post("/api/organisms/{organism_id}/cells/{cell_id}/divide")
+    async def divide_cell_route(organism_id: str, cell_id: str, payload: DivideCellRequest, user: AuthUser = Depends(require_current_user)) -> dict[str, object]:
+        try:
+            division = divide_cell(organism_id, cell_id, payload, user.id)
+        except ValueError as exc:
+            raise HTTPException(status_code=409, detail=str(exc)) from exc
+        if division is None:
             raise HTTPException(status_code=404, detail="cell not found")
-        if storage.postgres is not None:
-            lineage = await storage.postgres.lineage(run_id, root)
-        else:
-            lineage = storage.memory.lineage(run_id, root)
-        return lineage if lineage is not None else {"run_id": run_id, "root": root, "nodes": [], "edges": []}
+        await _persist_runtime(app)
+        return {"division": division.model_dump(mode="json")}
 
-    @app.get("/api/runs/{run_id}/cells/{cell_id}")
-    async def get_cell(run_id: str, cell_id: str) -> dict[str, object]:
-        cell = await _get_cell_state(app, run_id, cell_id)
+    @app.get("/api/organisms/{organism_id}/cell-divisions")
+    async def cell_divisions_route(organism_id: str, user: AuthUser = Depends(require_current_user)) -> dict[str, object]:
+        divisions = list_cell_divisions(organism_id, user.id)
+        if divisions is None:
+            raise HTTPException(status_code=404, detail="organism not found")
+        return {"cell_divisions": [division.model_dump(mode="json") for division in divisions]}
+
+    @app.post("/api/organisms/{organism_id}/food")
+    async def food_route(organism_id: str, payload: FoodIntakeRequest, user: AuthUser = Depends(require_current_user)) -> dict[str, object]:
+        food = add_food(organism_id, payload, user.id)
+        if food is None:
+            raise HTTPException(status_code=404, detail="organism not found")
+        await _persist_runtime(app)
+        return {"food": food.model_dump(mode="json")}
+
+    @app.post("/api/organisms/{organism_id}/oxygen")
+    async def oxygen_route(organism_id: str, payload: OxygenGrantRequest, user: AuthUser = Depends(require_current_user)) -> dict[str, object]:
+        oxygen = grant_oxygen(organism_id, payload, user.id)
+        if oxygen is None:
+            raise HTTPException(status_code=404, detail="organism not found")
+        await _persist_runtime(app)
+        return {"oxygen": oxygen.model_dump(mode="json")}
+
+    @app.get("/api/organisms/{organism_id}/health")
+    async def health_report_route(organism_id: str, user: AuthUser = Depends(require_current_user)) -> dict[str, object]:
+        report = health_report(organism_id, user.id)
+        if report is None:
+            raise HTTPException(status_code=404, detail="organism not found")
+        return {"health": report}
+
+    @app.post("/api/organisms/{organism_id}/cells/{cell_id}/self-consume")
+    async def self_consume_cell_route(organism_id: str, cell_id: str, user: AuthUser = Depends(require_current_user)) -> dict[str, object]:
+        cell = self_consume_cell(organism_id, cell_id, user.id)
         if cell is None:
             raise HTTPException(status_code=404, detail="cell not found")
-        return {"run_id": run_id, "cell": cell.model_dump(mode="json")}
+        await _persist_runtime(app)
+        return {"cell": cell.model_dump(mode="json")}
 
-    @app.get("/api/runs/{run_id}/cells/{cell_id}/events")
-    async def get_cell_events(run_id: str, cell_id: str, scope: str = "self") -> dict[str, object]:
-        if scope not in {"self", "lineage", "descendants"}:
-            raise HTTPException(status_code=422, detail="scope must be self, lineage, or descendants")
-        storage = _storage_manager(app)
-        if await _get_run_record(app, run_id) is None:
-            raise HTTPException(status_code=404, detail="run not found")
-        if await _get_cell_state(app, run_id, cell_id) is None:
+    @app.post("/api/organisms/{organism_id}/cells/{cell_id}/mark-dead")
+    async def mark_cell_dead_route(organism_id: str, cell_id: str, user: AuthUser = Depends(require_current_user)) -> dict[str, object]:
+        cell = mark_cell_dead(organism_id, cell_id, user.id)
+        if cell is None:
             raise HTTPException(status_code=404, detail="cell not found")
-        if storage.postgres is not None:
-            events = await storage.postgres.cell_events(run_id, cell_id, scope)
-        else:
-            events = storage.memory.cell_events(run_id, cell_id, scope)
-        if events is None:
-            events = []
-        return {"run_id": run_id, "cell_id": cell_id, "scope": scope, "events": [event.model_dump(mode="json") for event in events]}
+        await _persist_runtime(app)
+        return {"cell": cell.model_dump(mode="json")}
 
-    @app.get("/api/runs/{run_id}/exports")
-    async def get_run_exports(run_id: str) -> dict[str, object]:
-        if await _get_run_record(app, run_id) is None:
-            raise HTTPException(status_code=404, detail="run not found")
-        manifest = read_export_manifest(_export_dir(run_id))
-        return {
-            "run_id": run_id,
-            "formats": describe_export_formats(),
-            "manifest": manifest.model_dump(mode="json") if manifest is not None else None,
-        }
+    @app.post("/api/organisms/{organism_id}/die")
+    async def die_organism_route(organism_id: str, user: AuthUser = Depends(require_current_user)) -> dict[str, object]:
+        soul = die_organism(organism_id, user.id)
+        if soul is None:
+            raise HTTPException(status_code=404, detail="organism not found")
+        await _persist_runtime(app)
+        return {"soul": soul.model_dump(mode="json")}
 
-    @app.post("/api/runs/{run_id}/exports")
-    async def create_run_exports(run_id: str, request: ExportRequest) -> dict[str, object]:
-        artifacts = await _get_run_artifacts(app, run_id)
-        if artifacts is None:
-            raise HTTPException(status_code=404, detail="run not found")
+    @app.get("/api/souls")
+    async def souls_route(user: AuthUser = Depends(require_current_user)) -> dict[str, object]:
+        return {"souls": [soul.model_dump(mode="json") for soul in list_souls(user.id)]}
+
+    @app.get("/api/souls/{soul_id}")
+    async def get_soul_route(soul_id: str, user: AuthUser = Depends(require_current_user)) -> dict[str, object]:
+        soul = get_soul(soul_id, user.id)
+        if soul is None:
+            raise HTTPException(status_code=404, detail="soul not found")
+        return {"soul": soul.model_dump(mode="json")}
+
+    @app.post("/api/souls/{soul_id}/reincarnate")
+    async def reincarnate_soul_route(soul_id: str, user: AuthUser = Depends(require_current_user)) -> dict[str, object]:
+        organism = reincarnate_soul(soul_id, user.id)
+        if organism is None:
+            raise HTTPException(status_code=404, detail="soul not found")
+        await _persist_runtime(app)
+        return {"organism": organism.model_dump(mode="json")}
+
+    @app.get("/api/bones")
+    async def bones_route(user: AuthUser = Depends(require_current_user)) -> dict[str, object]:
+        return {"bones": [bone.model_dump(mode="json") for bone in list_bones(user.id)]}
+
+    @app.get("/api/bones/proposals")
+    async def structure_proposals_route(user: AuthUser = Depends(require_current_user)) -> dict[str, object]:
+        return {"proposals": [proposal.model_dump(mode="json") for proposal in list_structure_proposals(user.id)]}
+
+    @app.post("/api/bones/proposals")
+    async def create_structure_proposal_route(payload: CreateBoneProposalRequest, user: AuthUser = Depends(require_current_user)) -> dict[str, object]:
+        proposal = create_bone_proposal(payload, user.id)
+        await _persist_runtime(app)
+        return {"proposal": proposal.model_dump(mode="json")}
+
+    @app.post("/api/bones/proposals/{proposal_id}/approve")
+    async def approve_structure_proposal_route(proposal_id: str, payload: DecideProposalRequest, user: AuthUser = Depends(require_current_user)) -> dict[str, object]:
+        proposal = decide_structure_proposal(proposal_id, payload, True, user.id)
+        if proposal is None:
+            raise HTTPException(status_code=404, detail="proposal not found")
+        await _persist_runtime(app)
+        return {"proposal": proposal.model_dump(mode="json")}
+
+    @app.post("/api/bones/proposals/{proposal_id}/reject")
+    async def reject_structure_proposal_route(proposal_id: str, payload: DecideProposalRequest, user: AuthUser = Depends(require_current_user)) -> dict[str, object]:
+        proposal = decide_structure_proposal(proposal_id, payload, False, user.id)
+        if proposal is None:
+            raise HTTPException(status_code=404, detail="proposal not found")
+        await _persist_runtime(app)
+        return {"proposal": proposal.model_dump(mode="json")}
+
+    @app.post("/api/organisms/{organism_id}/wake")
+    async def wake_route(organism_id: str, user: AuthUser = Depends(require_current_user)) -> dict[str, object]:
+        organism = wake_organism(organism_id, user.id)
+        if organism is None:
+            raise HTTPException(status_code=404, detail="organism not found")
+        await _persist_runtime(app)
+        return {"organism": organism.model_dump(mode="json")}
+
+    @app.post("/api/organisms/{organism_id}/hibernate")
+    async def hibernate_route(organism_id: str, user: AuthUser = Depends(require_current_user)) -> dict[str, object]:
+        organism = hibernate_organism(organism_id, user.id)
+        if organism is None:
+            raise HTTPException(status_code=404, detail="organism not found")
+        await _persist_runtime(app)
+        return {"organism": organism.model_dump(mode="json")}
+
+    @app.get("/api/organisms/{organism_id}/cells")
+    async def cells_route(organism_id: str, user: AuthUser = Depends(require_current_user)) -> dict[str, object]:
+        cells = list_cells(organism_id, user.id)
+        if cells is None:
+            raise HTTPException(status_code=404, detail="organism not found")
+        return {"cells": [cell.model_dump(mode="json") for cell in cells]}
+
+    @app.post("/api/organisms/{organism_id}/cells")
+    async def create_cell_route(organism_id: str, payload: CreateCellRequest, user: AuthUser = Depends(require_current_user)) -> dict[str, object]:
+        cell = create_cell(organism_id, payload, user.id)
+        if cell is None:
+            raise HTTPException(status_code=404, detail="organism not found")
+        await _persist_runtime(app)
+        return {"cell": cell.model_dump(mode="json")}
+
+    @app.patch("/api/organisms/{organism_id}/cells/{cell_id}")
+    async def update_cell_route(organism_id: str, cell_id: str, payload: UpdateCellRequest, user: AuthUser = Depends(require_current_user)) -> dict[str, object]:
+        cell = update_cell(organism_id, cell_id, payload, user.id)
+        if cell is None:
+            raise HTTPException(status_code=404, detail="cell not found")
+        await _persist_runtime(app)
+        return {"cell": cell.model_dump(mode="json")}
+
+    @app.post("/api/organisms/{organism_id}/cells/{cell_id}/hibernate")
+    async def hibernate_cell_route(organism_id: str, cell_id: str, user: AuthUser = Depends(require_current_user)) -> dict[str, object]:
+        cell = hibernate_cell(organism_id, cell_id, user.id)
+        if cell is None:
+            raise HTTPException(status_code=404, detail="cell not found")
+        await _persist_runtime(app)
+        return {"cell": cell.model_dump(mode="json")}
+
+    @app.get("/api/organisms/{organism_id}/memory")
+    async def memory_route(organism_id: str, user: AuthUser = Depends(require_current_user)) -> dict[str, object]:
+        records = list_memory(organism_id, user.id)
+        if records is None:
+            raise HTTPException(status_code=404, detail="organism not found")
+        return {"memory_records": [record.model_dump(mode="json") for record in records]}
+
+    @app.post("/api/organisms/{organism_id}/memory")
+    async def create_memory_route(organism_id: str, payload: CreateMemoryRequest, user: AuthUser = Depends(require_current_user)) -> dict[str, object]:
+        record = create_memory(organism_id, payload, user.id)
+        if record is None:
+            raise HTTPException(status_code=404, detail="organism not found")
+        await _persist_runtime(app)
+        return {"memory_record": record.model_dump(mode="json")}
+
+    @app.get("/api/organisms/{organism_id}/memory/{memory_id}")
+    async def get_memory_route(organism_id: str, memory_id: str, user: AuthUser = Depends(require_current_user)) -> dict[str, object]:
+        record = get_memory(organism_id, memory_id, user.id)
+        if record is None:
+            raise HTTPException(status_code=404, detail="memory not found")
+        return {"memory_record": record.model_dump(mode="json")}
+
+    @app.post("/api/organisms/{organism_id}/memory/{memory_id}/deprecate")
+    async def deprecate_memory_route(organism_id: str, memory_id: str, user: AuthUser = Depends(require_current_user)) -> dict[str, object]:
+        record = deprecate_memory(organism_id, memory_id, user.id)
+        if record is None:
+            raise HTTPException(status_code=404, detail="memory not found")
+        await _persist_runtime(app)
+        return {"memory_record": record.model_dump(mode="json")}
+
+    @app.post("/api/organisms/{organism_id}/signals")
+    async def submit_signal_route(
+        organism_id: str,
+        payload: SubmitSignalRequest,
+        user: AuthUser = Depends(require_current_user),
+    ) -> dict[str, object]:
+        response = submit_signal(organism_id, payload, user.id, Actor(actor_id=user.id, roles=["operator"]))
+        if response is None:
+            raise HTTPException(status_code=404, detail="organism not found")
+        await _persist_runtime(app)
+        return response.model_dump(mode="json")
+
+    @app.get("/api/organisms/{organism_id}/events")
+    async def organism_events_route(
+        organism_id: str,
+        cursor: int = 0,
+        limit: int = 100,
+        type: str | None = None,
+        signal_id: str | None = None,
+        user: AuthUser = Depends(require_current_user),
+    ) -> dict[str, object]:
+        page = list_events(organism_id, user.id, event_type=type, signal_id=signal_id, limit=limit, cursor=cursor)
+        if page is None:
+            raise HTTPException(status_code=404, detail="organism not found")
+        return page
+
+    @app.post("/api/organisms/{organism_id}/signals/{signal_id}/replay")
+    async def replay_signal_route(organism_id: str, signal_id: str, user: AuthUser = Depends(require_current_user)) -> dict[str, object]:
+        replay = replay_signal(organism_id, signal_id, user.id)
+        if replay is None:
+            raise HTTPException(status_code=404, detail="signal not found")
+        await _persist_runtime(app)
+        return {"replay": replay.model_dump(mode="json")}
+
+    @app.get("/api/organisms/{organism_id}/signals/{signal_id}/replay")
+    async def replay_signal_get_route(organism_id: str, signal_id: str, user: AuthUser = Depends(require_current_user)) -> dict[str, object]:
+        replay = replay_signal(organism_id, signal_id, user.id)
+        if replay is None:
+            raise HTTPException(status_code=404, detail="signal not found")
+        return {"replay": replay.model_dump(mode="json")}
+
+    @app.get("/api/contracts")
+    async def contracts_route(user: AuthUser = Depends(require_current_user)) -> dict[str, object]:
+        return {"contracts": [contract.model_dump(mode="json") for contract in list_contracts(user.id)]}
+
+    @app.post("/api/contracts")
+    async def create_contract_route(payload: CreateContractRequest, user: AuthUser = Depends(require_current_user)) -> dict[str, object]:
+        contract = create_contract(payload, user.id)
+        await _persist_runtime(app)
+        return {"contract": contract.model_dump(mode="json")}
+
+    @app.get("/api/capabilities")
+    async def capabilities_route(user: AuthUser = Depends(require_current_user)) -> dict[str, object]:
+        return {"capabilities": [item.model_dump(mode="json") for item in list_capabilities(user.id)]}
+
+    @app.post("/api/capabilities")
+    async def create_capability_route(payload: CreateCapabilityRequest, user: AuthUser = Depends(require_current_user)) -> dict[str, object]:
+        capability = create_capability(payload, user.id)
+        await _persist_runtime(app)
+        return {"capability": capability.model_dump(mode="json")}
+
+    @app.post("/api/contracts/{contract_id}/validate-adapter")
+    async def validate_contract_adapter_route(contract_id: str, user: AuthUser = Depends(require_current_user)) -> dict[str, object]:
+        report = validate_contract_adapter(contract_id, user.id)
+        if report is None:
+            raise HTTPException(status_code=404, detail="contract not found")
+        return {"report": report.model_dump(mode="json")}
+
+    @app.post("/api/contracts/{contract_id}/test-adapter")
+    async def test_contract_adapter_route(contract_id: str, payload: AdapterTestRequest, user: AuthUser = Depends(require_current_user)) -> dict[str, object]:
+        result = test_contract_adapter(contract_id, payload, user.id)
+        if result is None:
+            raise HTTPException(status_code=404, detail="contract not found")
+        return {"result": result}
+
+    @app.post("/api/contracts/{contract_id}/deprecate")
+    async def deprecate_contract_route(contract_id: str, user: AuthUser = Depends(require_current_user)) -> dict[str, object]:
         try:
-            manifest = write_bi_bundle(artifacts, _export_dir(run_id), request.formats)
-            logger.info(
-                "bi_export_created",
-                extra={"run_id": run_id, "formats": ",".join(request.formats), "storage_mode": _storage_manager(app).status.mode},
-            )
+            contract = deprecate_contract(contract_id, user.id)
         except ValueError as exc:
-            raise HTTPException(status_code=422, detail=str(exc)) from exc
-        except RuntimeError as exc:
-            logger.exception("bi_export_failed", extra={"run_id": run_id, "formats": ",".join(request.formats)})
-            raise HTTPException(status_code=503, detail=str(exc)) from exc
-        return {"run_id": run_id, "manifest": manifest.model_dump(mode="json")}
-
-    @app.get("/api/runs/{run_id}/exports/{export_format}/download")
-    async def download_run_export(run_id: str, export_format: str) -> FileResponse:
-        artifacts = await _get_run_artifacts(app, run_id)
-        if artifacts is None:
-            raise HTTPException(status_code=404, detail="run not found")
-        formats = list(BI_EXPORT_FORMATS) if export_format == "all" else [export_format]
-        try:
-            manifest = read_export_manifest(_export_dir(run_id))
-            if manifest is None or any(item not in manifest.formats for item in formats):
-                write_bi_bundle(artifacts, _export_dir(run_id), formats)
-            zip_path = write_export_zip(_export_dir(run_id), export_format)
-        except ValueError as exc:
-            raise HTTPException(status_code=422, detail=str(exc)) from exc
-        except FileNotFoundError as exc:
             raise HTTPException(status_code=409, detail=str(exc)) from exc
-        except RuntimeError as exc:
-            logger.exception("bi_export_download_failed", extra={"run_id": run_id, "format": export_format})
-            raise HTTPException(status_code=503, detail=str(exc)) from exc
-        return FileResponse(
-            zip_path,
-            media_type="application/zip",
-            filename=f"{run_id}-{export_format}.zip",
-        )
+        if contract is None:
+            raise HTTPException(status_code=404, detail="contract not found")
+        await _persist_runtime(app)
+        return {"contract": contract.model_dump(mode="json")}
 
-    @app.websocket("/api/runs/{run_id}/stream")
-    async def stream_run(websocket: WebSocket, run_id: str) -> None:
-        await websocket.accept()
-        artifacts = await _get_run_artifacts(app, run_id)
-        if artifacts is None:
-            await websocket.send_json({"type": "error", "message": "run not found"})
-            await websocket.close()
-            return
-        events_by_step = {}
-        for event in artifacts.events:
-            events_by_step.setdefault(event.step, []).append(event.model_dump(mode="json"))
-        for metric in artifacts.metrics:
-            await websocket.send_json(
-                {
-                    "type": "step",
-                    "run_id": run_id,
-                    "metrics": metric.model_dump(mode="json"),
-                    "events": events_by_step.get(metric.step, []),
-                }
-            )
-        await websocket.send_json({"type": "complete", "run_id": run_id, "termination_reason": artifacts.termination_reason.value})
-        await websocket.close()
+    @app.get("/api/structure-requests")
+    async def structure_requests_route(user: AuthUser = Depends(require_current_user)) -> dict[str, object]:
+        return {"structure_requests": [item.model_dump(mode="json") for item in list_structure_requests(user.id)]}
+
+    @app.post("/api/structure-requests/{request_id}/resolve")
+    async def resolve_structure_request_route(
+        request_id: str,
+        payload: ResolveStructureRequestRequest,
+        user: AuthUser = Depends(require_current_user),
+    ) -> dict[str, object]:
+        request = resolve_structure_request(request_id, payload, user.id)
+        if request is None:
+            raise HTTPException(status_code=404, detail="structure request not found")
+        await _persist_runtime(app)
+        return {"structure_request": request.model_dump(mode="json")}
+
+    @app.post("/api/structure-requests/{request_id}/block")
+    async def block_structure_request_route(
+        request_id: str,
+        payload: BlockStructureRequestRequest,
+        user: AuthUser = Depends(require_current_user),
+    ) -> dict[str, object]:
+        request = block_structure_request(request_id, payload, user.id)
+        if request is None:
+            raise HTTPException(status_code=404, detail="structure request not found")
+        await _persist_runtime(app)
+        return {"structure_request": request.model_dump(mode="json")}
+
+    @app.get("/api/genomes/{genome_id}")
+    async def genome_route(genome_id: str, user: AuthUser = Depends(require_current_user)) -> dict[str, object]:
+        genome = get_genome(genome_id)
+        if genome is None:
+            raise HTTPException(status_code=404, detail="genome not found")
+        return {"genome": genome.model_dump(mode="json")}
+
+    @app.get("/api/genomes")
+    async def genomes_route(user: AuthUser = Depends(require_current_user)) -> dict[str, object]:
+        return {"genomes": [genome.model_dump(mode="json") for genome in list_genomes()]}
+
+    @app.post("/api/genomes")
+    async def create_genome_route(payload: CreateGenomeVersionRequest, user: AuthUser = Depends(require_current_user)) -> dict[str, object]:
+        version = create_genome_version(payload, user.id)
+        await _persist_runtime(app)
+        return {"genome_version": version.model_dump(mode="json")}
+
+    @app.post("/api/genomes/{genome_id}/versions")
+    async def create_genome_version_route(genome_id: str, payload: CreateGenomeVersionRequest, user: AuthUser = Depends(require_current_user)) -> dict[str, object]:
+        if payload.genome.genome_id != genome_id:
+            raise HTTPException(status_code=422, detail="genome id mismatch")
+        version = create_genome_version(payload, user.id)
+        await _persist_runtime(app)
+        return {"genome_version": version.model_dump(mode="json")}
+
+    @app.get("/api/genomes/{genome_id}/versions")
+    async def genome_versions_route(genome_id: str, user: AuthUser = Depends(require_current_user)) -> dict[str, object]:
+        versions = list_genome_versions(genome_id, user.id)
+        return {"genome_versions": [version.model_dump(mode="json") for version in versions or []]}
+
+    @app.post("/api/genomes/{genome_id}/versions/{version}/activate")
+    async def activate_genome_version_route(genome_id: str, version: int, user: AuthUser = Depends(require_current_user)) -> dict[str, object]:
+        genome_version = activate_genome_version(genome_id, version, user.id)
+        if genome_version is None:
+            raise HTTPException(status_code=404, detail="genome version not found")
+        await _persist_runtime(app)
+        return {"genome_version": genome_version.model_dump(mode="json")}
+
+    @app.post("/api/organisms/{organism_id}/genome/preview")
+    async def preview_genome_route(organism_id: str, payload: GenomePreviewRequest, user: AuthUser = Depends(require_current_user)) -> dict[str, object]:
+        result = preview_genome(organism_id, payload, user.id)
+        if result is None:
+            raise HTTPException(status_code=404, detail="organism or cell not found")
+        return {"preview": result}
+
+    @app.post("/api/genomes/{genome_id}/validate")
+    async def validate_genome_route(genome_id: str, payload: GenomeValidationRequest, user: AuthUser = Depends(require_current_user)) -> dict[str, object]:
+        if payload.genome.genome_id != genome_id:
+            raise HTTPException(status_code=422, detail="genome id mismatch")
+        return validate_genome(payload.genome).model_dump(mode="json")
+
+    @app.patch("/api/genomes/{genome_id}/division-policy")
+    async def update_division_policy_route(genome_id: str, payload: UpdateDivisionPolicyRequest, user: AuthUser = Depends(require_current_user)) -> dict[str, object]:
+        genome = update_genome_division_policy(genome_id, payload.policy)
+        if genome is None:
+            raise HTTPException(status_code=404, detail="genome not found")
+        await _persist_runtime(app)
+        return {"genome": genome.model_dump(mode="json")}
+
+    @app.get("/api/organisms/{organism_id}/cells/{cell_id}/division-readiness")
+    async def division_readiness_route(organism_id: str, cell_id: str, user: AuthUser = Depends(require_current_user)) -> dict[str, object]:
+        result = check_cell_division_readiness(organism_id, cell_id, user.id)
+        if result is None:
+            raise HTTPException(status_code=404, detail="organism or cell not found")
+        return {"readiness": result.model_dump(mode="json")}
+
+    @app.get("/api/organisms/{organism_id}/policies")
+    async def policies_route(organism_id: str, user: AuthUser = Depends(require_current_user)) -> dict[str, object]:
+        version = get_policies(organism_id, user.id)
+        if version is None:
+            raise HTTPException(status_code=404, detail="organism not found")
+        return {"policy_version": version.model_dump(mode="json")}
+
+    @app.put("/api/organisms/{organism_id}/policies")
+    async def update_policies_route(organism_id: str, payload: PolicyUpdateRequest, user: AuthUser = Depends(require_current_user)) -> dict[str, object]:
+        try:
+            version = update_policies(organism_id, payload, user.id)
+        except ValueError as exc:
+            raise HTTPException(status_code=422, detail=str(exc)) from exc
+        if version is None:
+            raise HTTPException(status_code=404, detail="organism not found")
+        await _persist_runtime(app)
+        return {"policy_version": version.model_dump(mode="json")}
+
+    @app.post("/api/organisms/{organism_id}/policies/validate")
+    async def validate_policies_route(organism_id: str, payload: PolicyUpdateRequest, user: AuthUser = Depends(require_current_user)) -> dict[str, object]:
+        if get_organism_detail(organism_id, user.id) is None:
+            raise HTTPException(status_code=404, detail="organism not found")
+        return {"report": validate_policies(payload).model_dump(mode="json")}
+
+    @app.post("/api/organisms/{organism_id}/policies/simulate")
+    async def simulate_policy_route(organism_id: str, payload: PolicySimulationRequest, user: AuthUser = Depends(require_current_user)) -> dict[str, object]:
+        result = simulate_policy(organism_id, payload, user.id)
+        if result is None:
+            raise HTTPException(status_code=404, detail="organism not found")
+        return result
+
+    @app.get("/api/maintenance/status")
+    async def maintenance_status_route(user: AuthUser = Depends(require_current_user)) -> dict[str, object]:
+        return maintenance_status()
+
+    @app.post("/api/maintenance/run")
+    async def run_maintenance_route(user: AuthUser = Depends(require_current_user)) -> dict[str, object]:
+        run = run_maintenance()
+        await _persist_runtime(app)
+        return {"run": run.model_dump(mode="json")}
+
+    @app.get("/api/metrics/runtime")
+    async def runtime_metrics_route(user: AuthUser = Depends(require_current_user)) -> dict[str, object]:
+        metrics = runtime_metrics()
+        return {"metrics": metrics}
+
+    @app.get("/api/metrics/organisms/{organism_id}")
+    async def organism_metrics_route(organism_id: str, user: AuthUser = Depends(require_current_user)) -> dict[str, object]:
+        metrics = runtime_metrics(organism_id, user.id)
+        if metrics is None:
+            raise HTTPException(status_code=404, detail="organism not found")
+        return {"metrics": metrics}
+
+    @app.get("/api/organisms/{organism_id}/export")
+    async def export_organism_route(organism_id: str, user: AuthUser = Depends(require_current_user)) -> dict[str, object]:
+        bundle = export_organism(organism_id, user.id)
+        if bundle is None:
+            raise HTTPException(status_code=404, detail="organism not found")
+        return {"bundle": bundle}
+
+    @app.post("/api/organisms/import")
+    async def import_organism_route(payload: dict[str, object], user: AuthUser = Depends(require_current_user)) -> dict[str, object]:
+        organism = import_organism(payload.get("bundle", payload), user.id)
+        await _persist_runtime(app)
+        return {"organism": organism.model_dump(mode="json")}
+
+    @app.get("/api/organisms/{organism_id}/debug-bundle")
+    async def debug_bundle_route(organism_id: str, user: AuthUser = Depends(require_current_user)) -> dict[str, object]:
+        bundle = debug_bundle(organism_id, user.id)
+        if bundle is None:
+            raise HTTPException(status_code=404, detail="organism not found")
+        return {"bundle": bundle}
+
+    @app.get("/api/reviews")
+    async def reviews_route(user: AuthUser = Depends(require_current_user)) -> dict[str, object]:
+        return {"reviews": [review.model_dump(mode="json") for review in list_reviews(user.id)]}
+
+    @app.post("/api/reviews")
+    async def create_review_route(payload: CreateReviewRequest, user: AuthUser = Depends(require_current_user)) -> dict[str, object]:
+        review = create_review(payload, user.id)
+        await _persist_runtime(app)
+        return {"review": review.model_dump(mode="json")}
+
+    @app.post("/api/reviews/{review_id}/approve")
+    async def approve_review_route(review_id: str, payload: DecideReviewRequest, user: AuthUser = Depends(require_current_user)) -> dict[str, object]:
+        review = decide_review(review_id, payload, True, user.id)
+        if review is None:
+            raise HTTPException(status_code=404, detail="review not found")
+        await _persist_runtime(app)
+        return {"review": review.model_dump(mode="json")}
+
+    @app.post("/api/reviews/{review_id}/reject")
+    async def reject_review_route(review_id: str, payload: DecideReviewRequest, user: AuthUser = Depends(require_current_user)) -> dict[str, object]:
+        review = decide_review(review_id, payload, False, user.id)
+        if review is None:
+            raise HTTPException(status_code=404, detail="review not found")
+        await _persist_runtime(app)
+        return {"review": review.model_dump(mode="json")}
 
     @app.get("/", response_class=FileResponse)
     def index() -> FileResponse:
@@ -484,151 +930,50 @@ def create_app() -> FastAPI:
     return app
 
 
-def _load_default_scenario() -> Scenario:
-    try:
-        raw = json.loads(DEFAULT_SCENARIO_PATH.read_text(encoding="utf-8"))
-    except json.JSONDecodeError:
-        import yaml
-
-        raw = yaml.safe_load(DEFAULT_SCENARIO_PATH.read_text(encoding="utf-8"))
-    try:
-        return Scenario.model_validate(raw)
-    except ValidationError as exc:
-        raise RuntimeError(f"default scenario is invalid: {exc}") from exc
+def _auth_repository(app: FastAPI):
+    auth = getattr(app.state, "auth", None)
+    if auth is None:
+        auth = InMemoryAuthRepository()
+        app.state.auth = auth
+    return auth
 
 
-def _export_dir(run_id: str) -> Path:
-    return Path(tempfile.gettempdir()) / "preon-systems-cell-exports" / run_id
-
-
-def _parse_compare_run_ids(raw: str) -> list[str]:
-    run_ids = []
-    for item in raw.split(","):
-        run_id = item.strip()
-        if run_id and run_id not in run_ids:
-            run_ids.append(run_id)
-    return run_ids
-
-
-def _validate_step_window(from_step: int, to_step: int | None) -> None:
-    if to_step is not None and to_step < from_step:
-        raise HTTPException(status_code=422, detail="to_step must be greater than or equal to from_step")
-
-
-async def _create_materialized_run(app: FastAPI, request: RunRequest) -> tuple[RunRecord, RunArtifacts]:
-    report = validate_scenario(request.scenario)
-    if not report.valid:
-        raise HTTPException(status_code=422, detail=report.errors)
-
-    storage = _storage_manager(app)
-    repository = InMemoryRunRepository() if storage.postgres is not None else storage.memory
-    artifacts = run_simulation(
-        scenario=request.scenario,
-        seed=request.seed,
-        max_steps=request.max_steps,
-        dt=request.dt,
-        repository=repository,
-    )
-    run_record = repository.get_run(artifacts.metadata.run_id)
-    if run_record is None:
-        raise HTTPException(status_code=500, detail="run was created without a run record")
-
-    if storage.postgres is not None:
-        await storage.postgres.save_artifacts(run_record, artifacts)
-        logger.info(
-            "run_persisted",
-            extra={
-                "run_id": run_record.run_id,
-                "storage_mode": storage.status.mode,
-                "metric_count": len(artifacts.metrics),
-                "event_count": len(artifacts.events),
-                "cell_count": len(artifacts.final_state.cells),
-            },
-        )
-    return run_record, artifacts
-
-
-def _run_update_clients(app: FastAPI) -> set[WebSocket]:
-    clients = getattr(app.state, "run_update_clients", None)
-    if clients is None:
-        clients = set()
-        app.state.run_update_clients = clients
-    return clients
-
-
-async def _broadcast_run_created(app: FastAPI, run_record: RunRecord) -> None:
-    clients = set(_run_update_clients(app))
-    if not clients:
-        return
-
-    storage = _storage_manager(app)
-    payload = {
-        "type": "run_created",
-        "run": run_record.model_dump(mode="json"),
-        "storage": storage.status.model_dump(),
-    }
-    stale_clients = []
-    for websocket in clients:
-        try:
-            await websocket.send_json(payload)
-        except Exception:
-            stale_clients.append(websocket)
-    for websocket in stale_clients:
-        _run_update_clients(app).discard(websocket)
-
-
-def _effective_scenario(scenario: Scenario, dt: float | None) -> Scenario:
-    if dt is None or dt == scenario.simulation.dt:
-        return scenario
-    return scenario.model_copy(update={"simulation": scenario.simulation.model_copy(update={"dt": dt})})
-
-
-def _storage_manager(app: FastAPI) -> StorageManager:
+async def _persist_runtime(app: FastAPI) -> None:
     storage = getattr(app.state, "storage", None)
-    if storage is None:
-        storage = StorageManager(memory=GLOBAL_RUN_REPOSITORY, postgres=None, status=_memory_status("app storage not initialized"))
-        app.state.storage = storage
-    return storage
+    if storage is not None and storage.postgres is not None:
+        await storage.postgres.save_stores(RUNTIME.stores)
 
 
-def _memory_status(reason: str):
-    from preon_systems_cell.storage.manager import StorageStatus
+def _exchange_oauth_code(
+    client_id: str,
+    client_secret: str,
+    redirect_uri: str,
+    code: str,
+    token_url: str,
+    userinfo_url: str,
+) -> dict:
+    """Synchronous OAuth2 code exchange. Run in a thread executor."""
+    token_data = urllib.parse.urlencode({
+        "code": code,
+        "client_id": client_id,
+        "client_secret": client_secret,
+        "redirect_uri": redirect_uri,
+        "grant_type": "authorization_code",
+    }).encode()
+    with urllib.request.urlopen(token_url, data=token_data, timeout=10) as resp:
+        tokens = json.loads(resp.read())
+    access_token = tokens.get("access_token")
+    if not access_token:
+        raise ValueError(f"no access_token in response: {list(tokens.keys())}")
+    req = urllib.request.Request(userinfo_url, headers={"Authorization": f"Bearer {access_token}"})
+    with urllib.request.urlopen(req, timeout=10) as resp:
+        return json.loads(resp.read())
 
-    return StorageStatus(mode="memory", primary="postgres", fallback="memory", degraded=True, reason=reason)
 
-
-async def _get_run_record(app: FastAPI, run_id: str) -> RunRecord | None:
-    storage = _storage_manager(app)
-    if storage.postgres is not None:
-        return await storage.postgres.get_run(run_id)
-    return storage.memory.get_run(run_id)
-
-
-async def _get_run_artifacts(app: FastAPI, run_id: str):
-    storage = _storage_manager(app)
-    if storage.postgres is not None:
-        return await storage.postgres.get_artifacts(run_id)
-    return storage.memory.get_artifacts(run_id)
-
-
-async def _get_cell_state(app: FastAPI, run_id: str, cell_id: str):
-    storage = _storage_manager(app)
-    if storage.postgres is not None:
-        return await storage.postgres.get_cell(run_id, cell_id)
-    return storage.memory.get_cell(run_id, cell_id)
-
-
-def _postgres_store(app: FastAPI) -> PostgresRunStore:
-    storage = _storage_manager(app)
-    if storage.postgres is None:
-        raise HTTPException(
-            status_code=503,
-            detail=f"Postgres persistence is unavailable; active storage mode is {storage.status.mode}",
-        )
-    store = storage.postgres
-    if isinstance(store, PostgresUnavailableError):
-        raise HTTPException(status_code=503, detail=str(store))
-    return store
+def _redirect_to_frontend(request: Request, path: str) -> RedirectResponse:
+    query = request.url.query
+    suffix = f"?{query}" if query else ""
+    return RedirectResponse(f"{frontend_base_url(request)}{path}{suffix}")
 
 
 app = create_app()

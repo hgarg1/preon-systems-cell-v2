@@ -1,162 +1,24 @@
-import pytest
-import yaml
 from pydantic import ValidationError
 
-from preon_systems_cell.models import Scenario, TerminationReason, WorldState
+from preon_systems_cell.models import CellRecord, Genome, OrganismRecord, Signal
 
 
-def test_invalid_v1_scenario_rejected():
-    payload = yaml.safe_load(
-        """
-version: 1
-scenario_name: bad
-environment:
-  nutrient_concentration: 10
-  replenishment_rate: 0
-  toxicity_rate: 0.01
-transport:
-  uptake_rate: 1
-  atp_cost_per_unit: 2
-metabolism:
-  atp_yield_per_nutrient: 2
-  waste_per_nutrient: 0.2
-  reserve_conversion_cap: 1
-maintenance:
-  basal_atp_cost: 1
-  membrane_decay: 0.1
-  repair_rate: 0.5
-  repair_atp_cost: 1
-  growth_atp_cost: 0
-  biomass_gain_per_growth: 0
-cell:
-  name: bad
-  initial_atp: 1
-  initial_adp: 0
-  nutrient_reserve: 0
-  waste: 0
-  membrane_integrity: 1
-  biomass: 1
-  maintenance_threshold_atp: 1
-  division_biomass_threshold: 2
-simulation:
-  dt: 1
-  max_steps: 2
-  record_every: 1
-"""
-    )
-    with pytest.raises(ValidationError):
-        Scenario.model_validate(payload)
+def test_core_runtime_models_validate_minimum_shapes():
+    organism = OrganismRecord(organism_id="organism-1")
+    cell = CellRecord(cell_id="cell-1", organism_id=organism.organism_id)
+    signal = Signal(signal_id="signal-1", organism_id=organism.organism_id, type="query", payload={"prompt": "hello"})
+    genome = Genome(genome_id=organism.genome_id)
+
+    assert organism.lifecycle_state == "hibernated"
+    assert cell.resource_budget.compute_units == 10
+    assert signal.priority == 5
+    assert genome.modules
 
 
-def test_v2_scenario_rejected_by_v3_schema():
-    payload = yaml.safe_load(
-        """
-version: 2
-scenario_name: old_v2
-environment:
-  glucose_concentration: 10
-  basal_glucose_level: 10
-  glucose_replenishment_rate: 0
-  toxicity_rate: 0.01
-transport:
-  passive_diffusion_rate: 1
-metabolism:
-  glucose_processing_cap_per_step: 1
-maintenance:
-  basal_atp_cost: 1
-  membrane_decay: 0
-  repair_rate: 0
-  repair_atp_cost: 0
-  growth_atp_cost: 0
-  biomass_gain_per_growth: 0
-cell:
-  name: old
-  initial_atp: 1
-  initial_adp: 1
-  cytosol:
-    glucose: 0
-    pyruvate: 0
-    nadh: 0
-  waste: 0
-  membrane_integrity: 1
-  glucose_transporter_density: 1
-  biomass: 1
-  maintenance_threshold_atp: 1
-  division_biomass_threshold: 2
-simulation:
-  dt: 1
-  max_steps: 2
-  record_every: 1
-"""
-    )
-    with pytest.raises(ValidationError):
-        Scenario.model_validate(payload)
-
-
-def test_v3_scenario_requires_positive_diffusion_and_metabolism_caps():
-    payload = yaml.safe_load(
-        """
-version: 3
-scenario_name: bad_v3
-environment:
-  glucose_concentration: 10
-  basal_glucose_level: 10
-  glucose_replenishment_rate: 0
-  toxicity_rate: 0.01
-transport:
-  passive_diffusion_rate: 0
-metabolism:
-  glucose_processing_cap_per_step: 0
-maintenance:
-  basal_atp_cost: 1
-  membrane_decay: 0
-  repair_rate: 0
-  repair_atp_cost: 0
-  growth_atp_cost: 0
-  biomass_gain_per_growth: 0
-cell:
-  name: bad
-  initial_cell_id: cell-1
-  max_population: 128
-  initial_atp: 1
-  initial_adp: 0
-  cytosol:
-    glucose: 0
-    pyruvate: 0
-    nadh: 0
-  waste: 0
-  membrane_integrity: 1
-  glucose_transporter_density: 1
-  biomass: 1
-  maintenance_threshold_atp: 1
-  division_biomass_threshold: 2
-simulation:
-  dt: 1
-  max_steps: 2
-  record_every: 1
-"""
-    )
-    with pytest.raises(ValidationError):
-        Scenario.model_validate(payload)
-
-
-def test_world_state_requires_population_cells():
-    payload = yaml.safe_load(
-        """
-step: 0
-time: 0
-cells: []
-environment:
-  glucose_concentration: 1
-  basal_glucose_level: 1
-  toxicity: 0
-"""
-    )
-
-    with pytest.raises(ValidationError):
-        WorldState.model_validate(payload)
-
-
-def test_termination_reason_enum_is_stable():
-    assert TerminationReason.ALL_CELLS_DEAD.value == "all_cells_dead"
-    assert TerminationReason.ATP_DEPLETION.value == "atp_depletion"
+def test_signal_requires_type():
+    try:
+        Signal(signal_id="signal-1", organism_id="organism-1", type="")
+    except ValidationError as exc:
+        assert "String should have at least 1 character" in str(exc)
+    else:
+        raise AssertionError("Signal accepted an empty type")

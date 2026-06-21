@@ -1,11 +1,9 @@
 from __future__ import annotations
 
-from pathlib import Path
 
-from preon_systems_cell.bi.parquet import write_parquet_tables
-from preon_systems_cell.bi.tables import build_bi_tables
-from preon_systems_cell.models import RunArtifacts
+class ParquetStorageRemovedError(RuntimeError):
+    pass
 
 
-def write_parquet_run(directory: str | Path, artifacts: RunArtifacts) -> None:
-    write_parquet_tables(Path(directory), build_bi_tables(artifacts))
+def write_parquet_run(*_args, **_kwargs) -> None:
+    raise ParquetStorageRemovedError("Run Parquet storage was removed in the organism runtime reset.")

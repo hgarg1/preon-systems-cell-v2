@@ -1,284 +1,276 @@
 from fastapi.testclient import TestClient
 import pytest
 
+from preon_systems_cell.api import RUNTIME
+from preon_systems_cell.auth import _attempts
 from preon_systems_cell.web import app
 
 
 client = TestClient(app)
+PASSWORD = "Correct-Horse-Battery-42!"
 
 
-def test_health_endpoint():
+@pytest.fixture(autouse=True)
+def reset_runtime_and_auth():
+    RUNTIME.stores.organisms.clear()
+    RUNTIME.stores.cells.clear()
+    RUNTIME.stores.signals.clear()
+    RUNTIME.stores.proteins.clear()
+    RUNTIME.stores.contracts.clear()
+    RUNTIME.stores.events.clear()
+    RUNTIME.stores.structure_requests.clear()
+    RUNTIME.stores.memory_records.clear()
+    RUNTIME.stores.capabilities.clear()
+    RUNTIME.stores.genome_versions.clear()
+    RUNTIME.stores.replay_runs.clear()
+    RUNTIME.stores.policy_versions.clear()
+    RUNTIME.stores.maintenance_runs.clear()
+    RUNTIME.stores.alerts.clear()
+    RUNTIME.stores.reviews.clear()
+    RUNTIME.stores.zygotes.clear()
+    RUNTIME.stores.organs.clear()
+    RUNTIME.stores.tissues.clear()
+    RUNTIME.stores.cell_divisions.clear()
+    RUNTIME.stores.food_intakes.clear()
+    RUNTIME.stores.oxygen_profiles.clear()
+    RUNTIME.stores.umbilical_cords.clear()
+    RUNTIME.stores.souls.clear()
+    RUNTIME.stores.bone_structures.clear()
+    RUNTIME.stores.structure_proposals.clear()
+    RUNTIME.stores.organelle_pipelines.clear()
+    RUNTIME.stores.vesicle_messages.clear()
+    RUNTIME.stores.cytoskeleton.clear()
+    RUNTIME.stores.actor_counts.clear()
+    _attempts.clear()
+    client.cookies.clear()
+    response = client.post("/auth/signup", json={"email": "primary@example.com", "password": PASSWORD})
+    assert response.status_code in {200, 409}
+    if response.status_code == 409:
+        assert client.post("/auth/login", json={"email": "primary@example.com", "password": PASSWORD}).status_code == 200
+
+
+def test_health_reports_organism_runtime():
     response = client.get("/health")
 
     assert response.status_code == 200
-    payload = response.json()
-    assert payload["status"] == "ok"
-    assert payload["storage"]["primary"] == "postgres"
-    assert payload["storage"]["fallback"] == "memory"
-    assert payload["storage"]["mode"] in {"postgres", "memory"}
+    assert response.json()["runtime"] == "organism"
 
 
-def test_default_scenario_endpoint():
-    response = client.get("/api/default-scenario")
+def test_full_organism_api_flow():
+    created = client.post(
+        "/api/organisms",
+        json={"identity_profile": {"name": "Sales Organism", "purpose": "Drive safe go-to-market tasks"}, "goals": ["qualify leads"]},
+    )
+    organism_id = created.json()["organism"]["organism_id"]
 
-    assert response.status_code == 200
-    payload = response.json()
-    assert payload["scenario"]["version"] == 3
-    assert payload["scenario"]["scenario_name"] == "default_cell"
-    assert payload["scenario"]["environment"]["glucose_concentration"] == 24.0
-    assert payload["scenario"]["environment"]["electron_acceptor_concentration"] == 24.0
-    assert payload["scenario"]["cell"]["initial_cell_id"] == "cell-1"
-    assert payload["scenario"]["cell"]["cytosol"]["nad_plus"] == 10.0
+    wake = client.post(f"/api/organisms/{organism_id}/wake")
+    signal = client.post(f"/api/organisms/{organism_id}/signals", json={"type": "calculate", "payload": {"expression": "40+2"}})
+    detail = client.get(f"/api/organisms/{organism_id}")
+    hibernate = client.post(f"/api/organisms/{organism_id}/hibernate")
 
-
-def test_validate_endpoint_accepts_default_scenario():
-    scenario = client.get("/api/default-scenario").json()["scenario"]
-
-    response = client.post("/api/validate", json={"scenario": scenario, "seed": 7})
-
-    assert response.status_code == 200
-    assert response.json()["valid"] is True
+    assert created.status_code == 200
+    assert wake.json()["organism"]["lifecycle_state"] == "active"
+    assert signal.json()["protein"]["payload"]["result"] == 42.0
+    assert signal.json()["signal"]["actor"]["actor_id"] == client.get("/auth/me").json()["user"]["id"]
+    assert detail.json()["proteins"]
+    assert hibernate.json()["organism"]["lifecycle_state"] == "hibernated"
 
 
-def test_create_cell_endpoint_supports_xyz():
-    scenario = client.get("/api/default-scenario").json()["scenario"]
+def test_contract_flow_and_auth_boundary():
+    created = client.post("/api/organisms", json={})
+    organism_id = created.json()["organism"]["organism_id"]
+    contract = client.post(
+        "/api/contracts",
+        json={"name": "CustomerProfileService.getByUserId", "allowed_actions": ["read_customer_profile"]},
+    )
 
-    response = client.post(
-        "/api/cells",
+    signal = client.post(
+        f"/api/organisms/{organism_id}/signals",
+        json={"type": "contract.call", "payload": {"contract": "CustomerProfileService.getByUserId", "action": "read_customer_profile"}},
+    )
+    blocked_deprecation = client.post(f"/api/contracts/{contract.json()['contract']['contract_id']}/deprecate")
+
+    other = TestClient(app)
+    assert other.post("/auth/signup", json={"email": "other@example.com", "password": PASSWORD}).status_code == 200
+    forbidden_detail = other.get(f"/api/organisms/{organism_id}")
+
+    assert signal.status_code == 200
+    assert signal.json()["protein"]["payload"]["contract"] == "CustomerProfileService.getByUserId"
+    assert blocked_deprecation.status_code == 409
+    assert forbidden_detail.status_code == 404
+
+
+def test_structure_request_routes_resolve_and_block():
+    created = client.post("/api/organisms", json={})
+    organism_id = created.json()["organism"]["organism_id"]
+
+    missing = client.post(
+        f"/api/organisms/{organism_id}/signals",
+        json={"type": "contract.call", "payload": {"contract": "MissingContract", "action": "read"}},
+    )
+    request_id = missing.json()["structure_request"]["request_id"]
+
+    listed = client.get("/api/structure-requests")
+    resolved = client.post(f"/api/structure-requests/{request_id}/resolve", json={"contract_id": "contract-created"})
+
+    missing_again = client.post(
+        f"/api/organisms/{organism_id}/signals",
+        json={"type": "contract.call", "payload": {"contract": "BlockedContract", "action": "read"}},
+    )
+    blocked = client.post(
+        f"/api/structure-requests/{missing_again.json()['structure_request']['request_id']}/block",
+        json={"reason": "not approved"},
+    )
+
+    assert listed.status_code == 200
+    assert listed.json()["structure_requests"][0]["requested_contract"] == "MissingContract"
+    assert resolved.json()["structure_request"]["status"] == "resolved"
+    assert blocked.json()["structure_request"]["status"] == "blocked"
+
+
+def test_removed_simulator_routes_return_404():
+    assert client.get("/api/default-scenario").status_code == 404
+    assert client.get("/api/runs").status_code == 404
+    assert client.post("/api/runs").status_code == 404
+    assert client.get("/api/runs/run-test").status_code == 404
+
+
+def test_v2_cells_memory_replay_metrics_and_reviews():
+    created = client.post("/api/organisms", json={})
+    organism_id = created.json()["organism"]["organism_id"]
+
+    cell = client.post(
+        f"/api/organisms/{organism_id}/cells",
+        json={"tissue_id": "analysis", "cell_type": "specialist", "expression_profile": {"arithmetic": 0.9}},
+    )
+    memory = client.post(
+        f"/api/organisms/{organism_id}/memory",
+        json={"scope": "organism", "kind": "calculate", "payload": {"note": "remember arithmetic"}},
+    )
+    signal = client.post(f"/api/organisms/{organism_id}/signals", json={"type": "calculate", "payload": {"expression": "5+5"}})
+    signal_id = signal.json()["signal"]["signal_id"]
+    replay = client.post(f"/api/organisms/{organism_id}/signals/{signal_id}/replay")
+    metrics = client.get(f"/api/metrics/organisms/{organism_id}")
+    bundle = client.get(f"/api/organisms/{organism_id}/debug-bundle")
+    review = client.post(
+        "/api/reviews",
+        json={"resource_type": "organism", "resource_id": organism_id, "action": "review_v2", "reason": "test"},
+    )
+    approved = client.post(f"/api/reviews/{review.json()['review']['review_id']}/approve", json={"reason": "ok"})
+
+    assert cell.status_code == 200
+    assert cell.json()["cell"]["tissue_id"] == "analysis"
+    assert memory.status_code == 200
+    assert signal.json()["protein"]["payload"]["result"] == 10.0
+    assert replay.status_code == 200
+    assert replay.json()["replay"]["divergence_report"]["protein_payload_match"] is True
+    assert metrics.json()["metrics"]["proteins"] >= 1
+    assert bundle.json()["bundle"]["redaction"]["auth"] == "excluded"
+    assert approved.json()["review"]["status"] == "approved"
+
+
+def test_v2_capability_policy_genome_and_maintenance_routes():
+    created = client.post("/api/organisms", json={})
+    organism_id = created.json()["organism"]["organism_id"]
+
+    capability = client.post("/api/capabilities", json={"name": "customer.profile.read", "schema": {"input": "object"}})
+    contract = client.post(
+        "/api/contracts",
         json={
-            "scenario": scenario,
-            "cell": {
-                "name": "Navigator",
-                "initial_cell_id": "nav-1",
-                "initial_atp": 17,
-                "glucose_transporter_density": 2.0,
-                "cytosol": {
-                    "glucose": 2.5,
-                    "pyruvate": 1.0,
-                    "nadh": 0.5,
-                    "acetyl_coa": 0.25,
-                    "nad_plus": 9.0,
-                    "fad": 3.0,
-                    "fadh2": 0.75,
-                    "co2": 1.25,
-                    "membrane_gradient": 2.5,
-                },
-                "x": 11.5,
-                "y": -4.25,
-                "z": 0.75,
-            },
+            "name": "AdapterContract",
+            "allowed_actions": ["read"],
+            "adapter_id": "adapter.customer",
+            "input_mapping": {"user_id": "id"},
+            "capability_ids": [capability.json()["capability"]["capability_id"]],
+            "test_vectors": [{"input": {"user_id": "u1"}, "expected": {"id": "u1"}}],
         },
     )
-
-    assert response.status_code == 200
-    payload = response.json()
-    cell = payload["state"]["cells"][0]
-    assert payload["scenario"]["cell"]["x"] == 11.5
-    assert cell["id"] == "nav-1"
-    assert cell["name"] == "Navigator"
-    assert cell["glucose_transporter_density"] == 2.0
-    assert cell["cytosol"]["glucose"] == 2.5
-    assert cell["cytosol"]["membrane_gradient"] == 2.5
-    assert cell["z"] == 0.75
-
-
-def test_run_endpoint_returns_population_artifacts():
-    scenario = client.get("/api/default-scenario").json()["scenario"]
-
-    response = client.post("/api/run", json={"scenario": scenario, "seed": 7, "max_steps": 4})
-
-    assert response.status_code == 200
-    payload = response.json()
-    assert payload["metadata"]["seed"] == 7
-    assert payload["final_state"]["step"] >= 1
-    assert payload["final_state"]["cells"]
-    assert "environment_glucose" in payload["metrics"][0]
-    assert "environment_electron_acceptor" in payload["metrics"][0]
-    assert "alive_count" in payload["metrics"][0]
-    assert payload["snapshots"][0]["state"]["cells"]
-    assert payload["metrics"]
-    assert payload["metadata"]["run_id"].startswith("run-")
-    runs_response = client.get("/api/runs")
-    assert runs_response.status_code == 200
-    assert any(run["run_id"] == payload["metadata"]["run_id"] for run in runs_response.json()["runs"])
-
-
-def test_run_endpoint_rejects_non_positive_max_steps():
-    scenario = client.get("/api/default-scenario").json()["scenario"]
-
-    response = client.post("/api/run", json={"scenario": scenario, "seed": 7, "max_steps": 0})
-
-    assert response.status_code == 422
-
-
-def test_run_centric_endpoints_expose_metrics_lineage_cells_and_events():
-    scenario = client.get("/api/default-scenario").json()["scenario"]
-
-    create_response = client.post("/api/runs", json={"scenario": scenario, "seed": 7, "max_steps": 8})
-
-    assert create_response.status_code == 200
-    run_id = create_response.json()["run"]["run_id"]
-
-    run_response = client.get(f"/api/runs/{run_id}")
-    metrics_response = client.get(f"/api/runs/{run_id}/metrics", params={"from_step": 1, "resolution": 2})
-    lineage_response = client.get(f"/api/runs/{run_id}/lineage", params={"root": "cell-1"})
-    cell_response = client.get(f"/api/runs/{run_id}/cells/cell-1")
-    events_response = client.get(f"/api/runs/{run_id}/cells/cell-1/events", params={"scope": "lineage"})
-
-    assert run_response.status_code == 200
-    assert metrics_response.status_code == 200
-    assert lineage_response.status_code == 200
-    assert cell_response.status_code == 200
-    assert events_response.status_code == 200
-    assert metrics_response.json()["run_id"] == run_id
-    assert metrics_response.json()["series"]
-    assert lineage_response.json()["nodes"][0]["id"] == "cell-1"
-    assert cell_response.json()["cell"]["id"] == "cell-1"
-    assert events_response.json()["events"]
-
-
-def test_run_analytics_endpoints_expose_timeseries_and_intelligence():
-    scenario = client.get("/api/default-scenario").json()["scenario"]
-    run_id = client.post("/api/runs", json={"scenario": scenario, "seed": 41, "max_steps": 8}).json()["run"]["run_id"]
-
-    timeseries_response = client.get(f"/api/runs/{run_id}/timeseries", params={"from_step": 2, "resolution": 2})
-    intelligence_response = client.get(f"/api/runs/{run_id}/intelligence")
-
-    assert timeseries_response.status_code == 200
-    assert intelligence_response.status_code == 200
-    points = timeseries_response.json()["points"]
-    assert points
-    assert all((point["step"] - 2) % 2 == 0 for point in points)
-    assert "atp_per_alive_cell" in points[0]
-    assert intelligence_response.json()["peak_population"] >= 1
-    assert intelligence_response.json()["collapse_cause"]
-
-
-def test_compare_endpoint_supports_n_runs_and_validates_bounds():
-    scenario = client.get("/api/default-scenario").json()["scenario"]
-    run_ids = [
-        client.post("/api/runs", json={"scenario": scenario, "seed": seed, "max_steps": 4}).json()["run"]["run_id"]
-        for seed in (51, 53, 59)
-    ]
-
-    response = client.get("/api/runs/compare", params={"runs": ",".join(run_ids), "resolution": 1})
-    single_response = client.get("/api/runs/compare", params={"runs": run_ids[0]})
-    repeated_response = client.get("/api/runs/compare", params={"runs": f"{run_ids[0]},{run_ids[0]}"})
-    missing_response = client.get("/api/runs/compare", params={"runs": f"{run_ids[0]},missing-run"})
-
-    assert response.status_code == 200
-    payload = response.json()
-    assert payload["baseline_run_id"] == run_ids[0]
-    assert [run["run_id"] for run in payload["runs"]] == run_ids
-    assert set(payload["deltas"]) == {run_ids[1], run_ids[2]}
-    assert payload["aligned_series"]
-    assert single_response.status_code == 422
-    assert repeated_response.status_code == 422
-    assert missing_response.status_code == 404
-
-
-def test_step_window_endpoints_reject_inverted_ranges():
-    scenario = client.get("/api/default-scenario").json()["scenario"]
-    run_ids = [
-        client.post("/api/runs", json={"scenario": scenario, "seed": seed, "max_steps": 4}).json()["run"]["run_id"]
-        for seed in (71, 73)
-    ]
-
-    metrics_response = client.get(f"/api/runs/{run_ids[0]}/metrics", params={"from_step": 3, "to_step": 1})
-    timeseries_response = client.get(f"/api/runs/{run_ids[0]}/timeseries", params={"from_step": 3, "to_step": 1})
-    compare_response = client.get(
-        "/api/runs/compare",
-        params={"runs": ",".join(run_ids), "from_step": 3, "to_step": 1},
+    adapter_report = client.post(f"/api/contracts/{contract.json()['contract']['contract_id']}/validate-adapter")
+    policy_sim = client.post(
+        f"/api/organisms/{organism_id}/policies/simulate",
+        json={"signal": {"type": "calculate", "payload": {"expression": "1+1"}}},
     )
+    genome_preview = client.post(
+        f"/api/organisms/{organism_id}/genome/preview",
+        json={"signal_type": "calculate", "payload": {"expression": "1+1"}},
+    )
+    maintenance = client.post("/api/maintenance/run")
 
-    assert metrics_response.status_code == 422
-    assert timeseries_response.status_code == 422
-    assert compare_response.status_code == 422
-
-
-def test_compare_endpoint_rejects_more_than_eight_runs():
-    scenario = client.get("/api/default-scenario").json()["scenario"]
-    run_ids = [
-        client.post("/api/runs", json={"scenario": scenario, "seed": seed, "max_steps": 1}).json()["run"]["run_id"]
-        for seed in range(61, 70)
-    ]
-
-    response = client.get("/api/runs/compare", params={"runs": ",".join(run_ids)})
-
-    assert response.status_code == 422
+    assert adapter_report.json()["report"]["valid"] is True
+    assert policy_sim.json()["membrane_decision"]["action"] == "accept"
+    assert genome_preview.json()["preview"]["module_id"] == "arithmetic"
+    assert maintenance.json()["run"]["status"] == "completed"
 
 
-def test_run_centric_cell_routes_reject_unknown_cell():
-    scenario = client.get("/api/default-scenario").json()["scenario"]
-    run_id = client.post("/api/runs", json={"scenario": scenario, "seed": 7, "max_steps": 2}).json()["run"]["run_id"]
+def test_v3_zygote_birth_and_growth_template_routes():
+    mother = client.post("/api/organisms", json={"identity_profile": {"name": "Mother", "purpose": "memory safety"}}).json()["organism"]
+    father = client.post("/api/organisms", json={"identity_profile": {"name": "Father", "purpose": "reasoning optimization"}}).json()["organism"]
 
-    lineage_response = client.get(f"/api/runs/{run_id}/lineage", params={"root": "missing-cell"})
-    events_response = client.get(f"/api/runs/{run_id}/cells/missing-cell/events")
+    negotiation = client.post(
+        "/api/reproduction/negotiate",
+        json={"mother_organism_id": mother["organism_id"], "father_organism_id": father["organism_id"]},
+    )
+    zygote = client.post(
+        "/api/reproduction/zygote",
+        json={"mother_organism_id": mother["organism_id"], "father_organism_id": father["organism_id"]},
+    )
+    zygote_id = zygote.json()["zygote"]["zygote_id"]
+    developed = client.post(f"/api/zygotes/{zygote_id}/develop", json={"target_stage": "embryo", "food_payload": {"lesson": "cell fate"}})
+    born = client.post(f"/api/zygotes/{zygote_id}/birth")
+    child_id = born.json()["organism"]["organism_id"]
+    detail = client.get(f"/api/organisms/{child_id}")
 
-    assert lineage_response.status_code == 404
-    assert events_response.status_code == 404
-
-
-def test_run_exports_can_be_created_and_downloaded():
-    pytest.importorskip("pyarrow")
-    scenario = client.get("/api/default-scenario").json()["scenario"]
-    run_id = client.post("/api/runs", json={"scenario": scenario, "seed": 19, "max_steps": 4}).json()["run"]["run_id"]
-
-    initial_response = client.get(f"/api/runs/{run_id}/exports")
-    create_response = client.post(f"/api/runs/{run_id}/exports", json={"formats": ["parquet", "powerbi"]})
-    download_response = client.get(f"/api/runs/{run_id}/exports/powerbi/download")
-
-    assert initial_response.status_code == 200
-    assert initial_response.json()["manifest"] is None
-    assert create_response.status_code == 200
-    assert create_response.json()["manifest"]["run_id"] == run_id
-    assert download_response.status_code == 200
-    assert download_response.headers["content-type"] == "application/zip"
-    assert download_response.content.startswith(b"PK")
-
-
-def test_run_exports_reject_unknown_format():
-    scenario = client.get("/api/default-scenario").json()["scenario"]
-    run_id = client.post("/api/runs", json={"scenario": scenario, "seed": 23, "max_steps": 2}).json()["run"]["run_id"]
-
-    response = client.post(f"/api/runs/{run_id}/exports", json={"formats": ["csv"]})
-
-    assert response.status_code == 422
+    assert negotiation.json()["negotiation"]["selected"] is True
+    assert zygote.json()["zygote"]["genome"]["organ_cell_dna"]["brain"]["cell_genome_id"] == "brain-cell-genome"
+    assert developed.json()["zygote"]["stage"] == "embryo"
+    assert born.json()["organism"]["development_stage"] == "born"
+    assert len(detail.json()["cells"]) == 22
+    assert {cell["organ_id"] for cell in detail.json()["cells"] if cell["organ_id"] != "core"} == {
+        "brain",
+        "heart",
+        "left-arm",
+        "right-arm",
+        "left-leg",
+        "right-leg",
+    }
 
 
-def test_run_stream_replays_metric_steps():
-    scenario = client.get("/api/default-scenario").json()["scenario"]
-    run_id = client.post("/api/runs", json={"scenario": scenario, "seed": 3, "max_steps": 3}).json()["run"]["run_id"]
+def test_v3_cell_division_copies_cell_genome():
+    organism = client.post("/api/organisms", json={}).json()["organism"]
+    organism_id = organism["organism_id"]
+    growth = client.post(f"/api/organisms/{organism_id}/growth/apply-template", json={"template_name": "human_minimal_v3"})
+    parent = next(cell for cell in growth.json()["growth"]["cells"] if cell["organ_id"] == "brain")
 
-    with client.websocket_connect(f"/api/runs/{run_id}/stream") as websocket:
-        first = websocket.receive_json()
-        complete_seen = False
-        while first["type"] != "complete":
-            assert first["type"] == "step"
-            assert first["run_id"] == run_id
-            assert "metrics" in first
-            first = websocket.receive_json()
-        complete_seen = first["type"] == "complete"
+    divided = client.post(f"/api/organisms/{organism_id}/cells/{parent['cell_id']}/divide", json={"mode": "symmetric"})
+    detail = client.get(f"/api/organisms/{organism_id}")
+    daughters = [cell for cell in detail.json()["cells"] if cell["parent_cell_id"] == parent["cell_id"]]
 
-    assert complete_seen is True
-
-
-def test_run_updates_websocket_broadcasts_created_runs():
-    scenario = client.get("/api/default-scenario").json()["scenario"]
-
-    with client.websocket_connect("/api/runs/updates") as websocket:
-        response = client.post("/api/runs", json={"scenario": scenario, "seed": 5, "max_steps": 2})
-        assert response.status_code == 200
-        run_id = response.json()["run"]["run_id"]
-        message = websocket.receive_json()
-
-    assert message["type"] == "run_created"
-    assert message["run"]["run_id"] == run_id
-    assert message["storage"]["mode"] in {"postgres", "memory"}
+    assert divided.status_code == 200
+    assert divided.json()["division"]["genome_copied"] is True
+    assert len(daughters) == 2
+    assert {cell["cell_genome_id"] for cell in daughters} == {parent["cell_genome_id"]}
 
 
-def test_root_serves_frontend():
-    response = client.get("/")
+def test_v3_food_oxygen_health_soul_and_bone_routes():
+    organism = client.post("/api/organisms", json={}).json()["organism"]
+    organism_id = organism["organism_id"]
 
-    assert response.status_code == 200
-    assert "Cell v3 Population Engine" in response.text
+    food = client.post(f"/api/organisms/{organism_id}/food", json={"food_type": "training_data", "payload": {"sample": "hello"}})
+    oxygen = client.post(
+        f"/api/organisms/{organism_id}/oxygen",
+        json={"compute_units": 12, "memory_units": 8, "storage_units": 20, "gpu_units": 1, "restricted": False},
+    )
+    health = client.get(f"/api/organisms/{organism_id}/health")
+    proposal = client.post("/api/bones/proposals", json={"name": "DurableAdapterSchema", "structure_type": "schema", "definition": {"input": "object"}})
+    approved = client.post(f"/api/bones/proposals/{proposal.json()['proposal']['proposal_id']}/approve", json={"reason": "fits v3 bone layer"})
+    bones = client.get("/api/bones")
+    soul = client.post(f"/api/organisms/{organism_id}/die")
+    reincarnated = client.post(f"/api/souls/{soul.json()['soul']['soul_id']}/reincarnate")
+
+    assert food.json()["food"]["food_type"] == "training_data"
+    assert oxygen.json()["oxygen"]["compute_units"] == 12
+    assert health.json()["health"]["cell_count"] >= 1
+    assert approved.json()["proposal"]["status"] == "approved"
+    assert bones.json()["bones"][0]["name"] == "DurableAdapterSchema"
+    assert soul.json()["soul"]["snapshot"]["organism"]["organism_id"] == organism_id
+    assert reincarnated.json()["organism"]["growth_state"]["reincarnated_from_soul_id"] == soul.json()["soul"]["soul_id"]

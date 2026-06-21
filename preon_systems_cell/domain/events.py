@@ -1,5 +1,3 @@
-from preon_systems_cell.models import Event, EventType
+from preon_systems_cell.models import RuntimeEvent, RuntimeEventType
 
-DomainEvent = Event
-
-__all__ = ["DomainEvent", "Event", "EventType"]
+__all__ = ["RuntimeEvent", "RuntimeEventType"]

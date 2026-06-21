@@ -1,7 +1,12 @@
-from preon_systems_cell.models import PopulationMetrics, StepSnapshot, StepTransition
+from __future__ import annotations
 
-StepMetrics = PopulationMetrics
-WorldSnapshot = StepSnapshot
-StepResult = StepTransition
+from preon_systems_cell.models import OrganismDetailResponse
 
-__all__ = ["PopulationMetrics", "StepMetrics", "StepSnapshot", "StepResult", "StepTransition", "WorldSnapshot"]
+
+def runtime_counts(detail: OrganismDetailResponse) -> dict[str, int]:
+    return {
+        "cells": len(detail.cells),
+        "events": len(detail.events),
+        "proteins": len(detail.proteins),
+        "structure_requests": len(detail.structure_requests),
+    }
