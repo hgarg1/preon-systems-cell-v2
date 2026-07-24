@@ -134,6 +134,17 @@ bone_contracts:
       - card_number may contain digits, spaces, and hyphens
     default_enzyme: enzyme.text.validation.luhn_check
 
+  - bone_id: knowledge.reference.lookup
+    capability_family: knowledge
+    capability_path: [knowledge, reference, lookup]
+    input_schema: {query: string}
+    output_schema: {result: array, source: array}
+    constraints:
+      - query must be a non-empty term present in the local reference corpus
+      - retrieval is local only; this bone never reaches the network
+    default_enzyme: enzyme.knowledge.reference.lookup
+    aliases: [reference_lookup]
+
   - bone_id: contract.gateway
     capability_family: contract
     capability_path: [contract, gateway]
@@ -244,6 +255,12 @@ enzymes:
     input_schema: {card_number: string}
     output_key: valid
     ref: "preon_systems_cell.bones.data.luhn:check"
+
+  - enzyme_id: enzyme.knowledge.reference.lookup
+    kind: python_ref
+    input_schema: {query: string}
+    output_key: result
+    ref: "preon_systems_cell.bones.data.reference:search"
 
   - enzyme_id: enzyme.contract.gateway
     kind: python_ref

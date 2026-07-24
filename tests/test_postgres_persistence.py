@@ -24,5 +24,23 @@ def test_postgres_schema_defines_organism_runtime_tables():
         "maintenance_runs",
         "runtime_alerts",
         "review_requests",
+        "cell_execution_runs",
+        "cell_execution_step_results",
+        "bone_structures",
+        "structure_proposals",
+        "resource_grants",
     ]:
         assert f"CREATE TABLE IF NOT EXISTS {table}" in schema
+    for memory_column in [
+        "memory_type",
+        "source_run_id",
+        "source_protein_ids",
+        "importance",
+        "admission_status",
+        "content_hash",
+        "ttl_seconds",
+        "last_accessed_at",
+        "access_count",
+        "storage_resource_id",
+    ]:
+        assert memory_column in schema

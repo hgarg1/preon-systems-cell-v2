@@ -2,7 +2,7 @@
 
 import Link from "next/link";
 import { usePathname } from "next/navigation";
-import { Activity, Brain, Database, Moon, Puzzle, Terminal, Zap } from "lucide-react";
+import { Activity, Bone, Brain, Database, Moon, Puzzle, Terminal, Zap } from "lucide-react";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { useOrganismDetail } from "@/lib/organism-detail-context";
@@ -25,6 +25,7 @@ const SUB_TABS = [
   { segment: "console", label: "Console",  Icon: Terminal  },
   { segment: "cells",   label: "Cells",    Icon: Puzzle    },
   { segment: "memory",  label: "Memory",   Icon: Database  },
+  { segment: "skeleton", label: "Skeleton", Icon: Bone     },
   { segment: "genome",  label: "Genome",   Icon: Brain     },
   { segment: "events",  label: "Events",   Icon: Activity  },
 ] as const;

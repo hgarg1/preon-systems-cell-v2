@@ -14,12 +14,13 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from typing import Any
 
+from preon_systems_cell.models import DataClass
+
 # Literal type aliases — kept as strings so they don't require an extra import at
 # call sites and serialise cleanly to JSON.
 ProteinType = str    # reasoning | retrieval | transformation | aggregation | evaluation
 ReasoningDepth = str  # shallow | moderate | deep
 CostTier = str       # cheap | balanced | premium
-DataClass = str      # public | internal | confidential | restricted
 EscalationLevel = str  # cell | tissue | organ | organism
 
 
@@ -107,3 +108,9 @@ class ModelExecutionTelemetry:
     evaluation_score: float | None = None
     cost_estimate: float | None = None
     failure_type: str | None = None
+    request_id: str | None = None
+    organism_id: str | None = None
+    cell_run_id: str | None = None
+    step_id: str | None = None
+    protein_id: str | None = None
+    provider_call_id: str | None = None

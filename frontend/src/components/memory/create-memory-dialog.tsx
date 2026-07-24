@@ -17,6 +17,9 @@ export function CreateMemoryDialog({
   const [open, setOpen] = useState(false);
   const [scope, setScope] = useState("organism");
   const [kind, setKind] = useState("note");
+  const [memoryType, setMemoryType] = useState<"episodic" | "semantic" | "procedural">("episodic");
+  const [importance, setImportance] = useState("0.5");
+  const [ttlSeconds, setTtlSeconds] = useState("");
   const [content, setContent] = useState("");
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -32,7 +35,14 @@ export function CreateMemoryDialog({
     setBusy(true);
     setError(null);
     try {
-      await createMemory(organismId, { scope, kind, payload });
+      await createMemory(organismId, {
+        scope,
+        kind,
+        memory_type: memoryType,
+        payload,
+        importance: Number(importance),
+        ...(ttlSeconds ? { ttl_seconds: Number(ttlSeconds) } : {}),
+      });
       await onCreated();
       setOpen(false);
       setContent("");
@@ -61,6 +71,27 @@ export function CreateMemoryDialog({
         <div>
           <Label htmlFor="mem-kind">Kind</Label>
           <Input id="mem-kind" value={kind} onChange={(e) => setKind(e.target.value)} className="mt-1" />
+        </div>
+        <div>
+          <Label htmlFor="mem-type">Memory type</Label>
+          <select
+            id="mem-type"
+            value={memoryType}
+            onChange={(event) => setMemoryType(event.target.value as typeof memoryType)}
+            className="mt-1 h-9 w-full rounded-md border border-white/10 bg-neutral-950 px-3 text-sm text-neutral-100"
+          >
+            <option value="episodic">Episodic</option>
+            <option value="semantic">Semantic</option>
+            <option value="procedural">Procedural</option>
+          </select>
+        </div>
+        <div>
+          <Label htmlFor="mem-importance">Importance (0–1)</Label>
+          <Input id="mem-importance" type="number" min="0" max="1" step="0.05" value={importance} onChange={(e) => setImportance(e.target.value)} className="mt-1" />
+        </div>
+        <div>
+          <Label htmlFor="mem-ttl">TTL seconds (optional)</Label>
+          <Input id="mem-ttl" type="number" min="1" value={ttlSeconds} onChange={(e) => setTtlSeconds(e.target.value)} className="mt-1" />
         </div>
       </div>
       <div className="mt-3">

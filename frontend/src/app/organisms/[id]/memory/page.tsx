@@ -17,12 +17,12 @@ export default function MemoryPage({ params }: { params: Promise<{ id: string }>
         <div>
           <h2 className="font-semibold text-white">Memory</h2>
           <p className="mt-0.5 text-sm text-neutral-500">
-            Persistent records the organism retains across hibernation cycles. Scoped by kind and confidence.
+            Explicitly admitted memory with provenance, relevance, lifecycle, access, and retention metadata.
           </p>
         </div>
         <CreateMemoryDialog organismId={id} onCreated={refresh} />
       </div>
-      <MemoryTable records={detail?.memory_records ?? []} />
+      <MemoryTable organismId={id} records={detail?.memory_records ?? []} onChanged={refresh} />
     </div>
   );
 }

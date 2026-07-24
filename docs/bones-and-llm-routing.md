@@ -80,6 +80,8 @@ Typed signals (`calculate`, `contract.call`, etc.) bypass the classifier entirel
 
 All entries share the same property: the answer is a pure function of the input — no network call, no LLM, no reasoning required. Each is a natural bone.
 
+This catalogue describes **capability bones** (`BoneContract`). Phase 5A also defines **structural bones**: organism-owned database, object-storage, queue, contract, and adapter resources grown by skeletal cells. The categories must not be combined: an enzyme satisfies a capability bone, while an osteoblast cell creates structural bone. See `skeletal-growth.md`.
+
 ### Mathematics & Statistics
 
 | Bone | What it gives |

@@ -21,6 +21,8 @@ Every design decision in this runtime has a biological counterpart.
 | Food | Structured data intake (prompts, tasks, identity seeds, domain knowledge) |
 | Oxygen | Compute grant (CPU time, memory, context window, GPU units) |
 | Mitochondria | Compute budget manager — food without oxygen causes suffocation |
+| Skeletal tissue | Osteoblast, osteoclast, and osteocyte cells that grow, remodel, and monitor infrastructure |
+| Structural bone | Organism-owned database, object-storage, queue, contract, or adapter structure |
 | Cell division | Genome-gated split producing daughter cells that inherit or differentiate from the parent |
 | Soul | Preserved essence of a terminated organism, available for reincarnation |
 
@@ -67,6 +69,54 @@ All three gates must pass simultaneously. The genome specifies the thresholds; t
 | `founder` | Neural crest migration — daughter seeds a new organ | New cell type progenitor |
 | `repair` | Wound healing — healthy neighbor replaces dead cell | Dead cell replacement (bypasses load/capability gates) |
 
+### Living Skeleton and Infrastructure Access
+
+Every organism is born with a skeletal tissue containing three ordinary, persisted cells:
+
+- An **osteoblast** proposes structural growth.
+- An **osteoclast** proposes remodeling or retirement.
+- An **osteocyte** monitors the resulting structure.
+
+Structural resources use a provider-neutral desired-state model covering database schemas, tables, indexes, blob/object namespaces, queues, topics, service contracts, and adapters. An approved plan materializes an organism-owned resource record. Other cells receive revocable, operation- and namespace-scoped `ResourceGrant` records; they do not receive raw provider credentials and do not route every data operation through a bone cell.
+
+Phase 5A ships a deterministic in-memory provider and durable PostgreSQL control-plane persistence. Provider labels such as `postgres`, `s3`, and `azure_blob` do not themselves mutate live infrastructure. Live provider adapters remain a production-hardening step behind the same plan/apply/inspect contract.
+
+See [Living Skeleton and Structural Resource Growth](docs/skeletal-growth.md) for the model, lifecycle, and API contract.
+
+Phase 5.5 adds opt-in live PostgreSQL and S3-compatible adapters,
+skeletal-cell execution provenance, and a durable queued-effect lifecycle.
+Approval returns `202 Accepted`; the Skeleton inspector shows effect progress
+and desired/observed resource health.
+
+#### Phase 5.5 validation status
+
+The real provider contract has been exercised against the dedicated Prisma
+staging resources:
+
+- PostgreSQL: `preon-cell-staging-db` in the `preon-internal-prod-db` project
+- Object storage: `preon-cell-staging` (S3-compatible)
+- Live structural round-trips: PostgreSQL schema create/inspect/retire and S3
+  namespace marker create/inspect/retire both pass
+- Python suite: `162 passed, 2 skipped`; the two skipped tests are the opt-in
+  live-provider tests when staging credentials are not present in the process
+
+The live tests use `PREON_TEST_DATABASE_URL` and the `PREON_TEST_S3_*` settings
+documented by the integration test contract. Credentials are supplied through
+the environment only and are never committed to the repository. Production
+resources must not be used for this test suite.
+
+### Durable Organism Memory
+
+Valid protein output is not automatically long-term memory. Phase 5B admits only explicit candidates that pass confidence, importance, novelty, provenance, ownership, and data-policy checks. Operator-created memory remains an explicit admission path.
+
+Before protein execution, a deterministic `ContextBuilder` retrieves relevant admitted memory by keywords, type, recency, importance, and confidence; filters by owner, lifecycle, TTL, and data class; deduplicates content; and enforces a bounded context budget. Only records actually injected into context have their access metadata updated.
+
+The first memory operation grows an organism-owned memory resource and scoped grant through the living skeleton. See [Durable Organism Memory and Context Construction](docs/organism-memory.md).
+
+Memory admission thresholds and context budgets are immutable organism policy
+versions. Recalled memory reaches model providers only as bounded, untrusted
+supporting data.
+
 ---
 
 ## Repository Layout
@@ -77,6 +127,13 @@ preon-systems-cell-v2/
 │   ├── web.py                   # All HTTP routes
 │   ├── api.py                   # Business logic layer
 │   ├── engine.py                # Organism runtime engine
+│   ├── skeletal.py              # Structural provider contract, planning, and skeletal cell identities
+│   ├── memory.py                # Admission policy, lifecycle helpers, deterministic ContextBuilder
+│   ├── coordination.py          # Phase 4 cell execution plans and safe DAG coordinator
+│   ├── execution_service.py     # Shared bounded execution, deadlines, cancellation
+│   ├── protein_output.py        # Canonical structured-output schemas and normalization
+│   ├── resilience.py            # Typed failures, retry budgets, circuit breakers
+│   ├── security.py              # Bounded payload redaction by DataClass
 │   ├── models.py                # Pydantic domain models
 │   ├── auth.py                  # Session auth, OAuth2, CSRF
 │   ├── email.py                 # Transactional email via Gmail OAuth2
@@ -94,7 +151,7 @@ preon-systems-cell-v2/
 │   │   ├── cell_router.py       # CellModelRouter — Day-One deterministic policy
 │   │   ├── fallback.py          # Fallback chain builder
 │   │   ├── telemetry.py         # ModelExecutionTelemetry in-memory log
-│   │   ├── tissue_council.py    # Stub — Phase 6
+│   │   ├── tissue_council.py    # Stub — Phase 6A
 │   │   ├── organ_policy.py      # Stub — Phase 9
 │   │   └── organism_authority.py # Stub — Phase 9
 │   └── storage/                 # PostgreSQL + in-memory stores
@@ -120,7 +177,7 @@ preon-systems-cell-v2/
 │
 └── docs/
     ├── architecture/
-    │   └── decisions/           # ADR-001 through ADR-007
+    │   └── decisions/           # ADR-001 through ADR-013
     ├── llm-proteins/            # LLM Protein architecture spec (§1–§19)
     ├── deployment.md            # Reference topology (Fly.io)
     ├── deployment/              # Cloud-specific variants
@@ -320,17 +377,30 @@ POST   /auth/oauth/google/callback
 
 ## Architecture Decisions
 
-Seven confirmed decisions are documented in [`docs/architecture/decisions/`](docs/architecture/decisions/):
+Thirteen accepted decisions are documented in [`docs/architecture/decisions/`](docs/architecture/decisions/):
 
-| ADR | Decision |
-|---|---|
-| [ADR-001](docs/architecture/decisions/ADR-001-atp-continuous-stream-model.md) | Resources are continuous streams; interruptions are pathological |
-| [ADR-002](docs/architecture/decisions/ADR-002-genesis-no-parents.md) | The first organism has no parents — Digital Adam & Eve |
-| [ADR-003](docs/architecture/decisions/ADR-003-primordial-soup-food-seeding.md) | Genesis food is pre-provisioned through a Primordial Soup |
-| [ADR-004](docs/architecture/decisions/ADR-004-oxygen-before-food-invariant.md) | Oxygen is always granted before food delivery |
-| [ADR-005](docs/architecture/decisions/ADR-005-three-gate-division-model.md) | Cell division requires three co-required gates: load, capability, lifecycle |
-| [ADR-006](docs/architecture/decisions/ADR-006-division-policy-in-genome.md) | Division policy belongs in the genome — cells don't decide to divide |
-| [ADR-007](docs/architecture/decisions/ADR-007-division-modes-taxonomy.md) | Four division modes with distinct biological purposes |
+| ADR | Decision | Status |
+|---|---|---|
+| [ADR-001](docs/architecture/decisions/ADR-001-atp-continuous-stream-model.md) | Resources are continuous streams; interruptions are pathological | Accepted |
+| [ADR-002](docs/architecture/decisions/ADR-002-genesis-no-parents.md) | The first organism has no parents — Digital Adam & Eve | Accepted |
+| [ADR-003](docs/architecture/decisions/ADR-003-primordial-soup-provisioning.md) | Genesis food is pre-provisioned through a Primordial Soup | Accepted |
+| [ADR-004](docs/architecture/decisions/ADR-004-oxygen-before-food-invariant.md) | Oxygen is always granted before food delivery | Accepted |
+| [ADR-005](docs/architecture/decisions/ADR-005-cell-division-three-gate-model.md) | Cell division requires three co-required gates: load, capability, lifecycle | Accepted |
+| [ADR-006](docs/architecture/decisions/ADR-006-division-policy-in-genome.md) | Division policy belongs in the genome — cells don't decide to divide | Accepted |
+| [ADR-007](docs/architecture/decisions/ADR-007-division-modes-taxonomy.md) | Four division modes with distinct biological purposes | Accepted |
+| [ADR-008](docs/architecture/decisions/ADR-008-structured-provider-output-boundary.md) | Normalize provider output at a canonical protein boundary | Accepted |
+| [ADR-009](docs/architecture/decisions/ADR-009-shared-execution-service.md) | Use a shared bounded execution service | Accepted |
+| [ADR-010](docs/architecture/decisions/ADR-010-hierarchical-trace-context.md) | Propagate an explicit hierarchical trace context | Accepted |
+| [ADR-011](docs/architecture/decisions/ADR-011-durable-execution-run-ledger.md) | Persist cell runs as a durable execution ledger | Accepted |
+| [ADR-012](docs/architecture/decisions/ADR-012-data-classification-and-provider-enforcement.md) | Enforce canonical data classification at provider invocation | Accepted |
+| [ADR-013](docs/architecture/decisions/ADR-013-bounded-resilience-semantics.md) | Use typed failures and bounded resilience semantics | Accepted |
+| [ADR-014](docs/architecture/decisions/ADR-014-first-class-skeletal-cells.md) | Model skeletal roles as first-class cells | Accepted |
+| [ADR-015](docs/architecture/decisions/ADR-015-governed-structural-resources-and-grants.md) | Use governed structural resources and scoped access grants | Accepted |
+| [ADR-016](docs/architecture/decisions/ADR-016-explicit-memory-admission-boundary.md) | Separate working state from admitted durable memory | Accepted |
+| [ADR-017](docs/architecture/decisions/ADR-017-deterministic-bounded-memory-context.md) | Build memory context deterministically within a fixed budget | Accepted |
+| [ADR-018](docs/architecture/decisions/ADR-018-modular-runtime-ports-and-adapters.md) | Use a modular runtime with ports and adapters | Accepted |
+| [ADR-019](docs/architecture/decisions/ADR-019-skeletal-cell-command-execution.md) | Execute structural commands through skeletal cells | Accepted |
+| [ADR-020](docs/architecture/decisions/ADR-020-transactional-structural-outbox.md) | Use a transactional outbox for structural effects | Accepted |
 
 ---
 
@@ -360,7 +430,7 @@ PREON_DATABASE_URL=postgresql://user:pass@localhost:5432/preon_cell
 
 Schema: [`preon_systems_cell/storage/sql/schema.sql`](preon_systems_cell/storage/sql/schema.sql)
 
-Tables: `users`, `sessions`, `organisms`, `cells`, `genomes`, `signals`, `proteins`, `contracts`, `runtime_events`, `memory_records`, `structure_requests`, `bones`, `tissues`, `organs`, `souls`, `zygotes`, and auth token tables.
+Tables include `users`, `sessions`, `organisms`, `cells`, `genomes`, `signals`, `proteins`, `contracts`, `runtime_events`, `memory_records`, `structure_requests`, `bone_structures`, `structure_proposals`, `resource_grants`, `tissues`, `organs`, `souls`, `zygotes`, and auth token tables.
 
 ---
 
@@ -380,3 +450,34 @@ Signal admitted
 ```
 
 The console renders each stage with timing, pass/fail, and the data flowing through.
+
+### Multi-Protein Cell Execution
+
+A `GenomeModule` may declare an `execution_plan` to process one admitted signal through multiple proteins inside the selected cell. Plans are bounded DAGs with dependency ordering, parallel-ready waves, safe conditional branches, input mapping from prior results, and bounded iteration:
+
+```json
+{
+  "plan_id": "research_then_summarize",
+  "steps": [
+    {
+      "step_id": "lookup",
+      "module_id": "retrieval",
+      "input_map": {"query": "$signal.term"}
+    },
+    {
+      "step_id": "combine",
+      "module_id": "aggregation",
+      "depends_on": ["lookup"],
+      "condition": "lookup.confidence >= 0.7",
+      "input_map": {"inputs": ["$steps.lookup.result"]}
+    }
+  ],
+  "final_step_id": "combine",
+  "fail_fast": true,
+  "max_parallelism": 4
+}
+```
+
+Step references can read `$signal`, `$steps`, `$shared`, `$result`, and `$iteration`. Conditions use a call-free expression evaluator; execution plans are limited to 100 steps, 16 parallel workers, and 10 iterations per step.
+
+The response preserves the existing final `protein` field and adds `execution_run` with ordered step outcomes. Legacy modules without an execution plan continue through the original single-protein path.

@@ -20,7 +20,10 @@ export default function ContractsPage() {
   }, []);
 
   useEffect(() => {
-    refresh().finally(() => setLoading(false));
+    const timeout = window.setTimeout(() => {
+      void refresh().finally(() => setLoading(false));
+    }, 0);
+    return () => window.clearTimeout(timeout);
   }, [refresh]);
 
   if (loading) return <div className="p-8 text-sm text-neutral-500">Loading contracts…</div>;
@@ -61,7 +64,7 @@ export default function ContractsPage() {
           ) : null}
         </div>
         <p className="mb-4 text-sm text-neutral-500">
-          Cells emit these when they need a contract that doesn't exist. Resolve by creating the contract, or block if invalid.
+          Cells emit these when they need a contract that doesn&apos;t exist. Resolve by creating the contract, or block if invalid.
         </p>
         <StructureQueue requests={requests} onRefresh={refresh} />
       </section>

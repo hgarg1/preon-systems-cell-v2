@@ -18,12 +18,16 @@ from preon_systems_cell.api import (
 from preon_systems_cell.models import (
     ApplyGrowthTemplateRequest,
     BlockStructureRequestRequest,
+    CellExecutionPlan,
     CreateContractRequest,
     CreateOrganismRequest,
     CreateZygoteRequest,
     DivideCellRequest,
+    ExecutionStep,
+    ExecutionStrategy,
     Genome,
     GenomeModule,
+    PolicySet,
     ResolveStructureRequestRequest,
     SubmitSignalRequest,
 )
@@ -56,9 +60,11 @@ def reset_runtime():
     RUNTIME.stores.souls.clear()
     RUNTIME.stores.bone_structures.clear()
     RUNTIME.stores.structure_proposals.clear()
+    RUNTIME.stores.resource_grants.clear()
     RUNTIME.stores.organelle_pipelines.clear()
     RUNTIME.stores.vesicle_messages.clear()
     RUNTIME.stores.cytoskeleton.clear()
+    RUNTIME.stores.cell_execution_runs.clear()
     RUNTIME.stores.actor_counts.clear()
 
 
@@ -80,6 +86,45 @@ def test_full_signal_flow_hibernates_after_approved_protein():
     assert detail is not None
     assert detail.organism.lifecycle_state == "hibernated"
     assert any(event.type == "ribosome" for event in detail.events)
+
+
+def test_submit_signal_response_includes_phase4_execution_run():
+    organism = create_organism(
+        CreateOrganismRequest(policies=PolicySet(allowed_signal_types=["workflow"]))
+    )
+    phase4_genome_id = "genome-api-phase4"
+    organism = organism.model_copy(update={"genome_id": phase4_genome_id})
+    RUNTIME.stores.organisms[organism.organism_id] = organism
+    RUNTIME.stores.genomes[phase4_genome_id] = Genome(
+        genome_id=phase4_genome_id,
+        modules=[
+            GenomeModule(
+                module_id="trigger",
+                signal_types=["workflow"],
+                execution_plan=CellExecutionPlan(
+                    plan_id="api-plan",
+                    steps=[ExecutionStep(step_id="work", module_id="work")],
+                ),
+            ),
+            GenomeModule(
+                module_id="work",
+                signal_types=["work"],
+                execution_strategy=ExecutionStrategy.PRECOMPUTED,
+            ),
+        ],
+    )
+
+    response = submit_signal(
+        organism.organism_id,
+        SubmitSignalRequest(type="workflow", payload={"message": "ping"}),
+    )
+
+    assert response is not None
+    assert response.execution_run is not None
+    assert response.execution_run.plan_id == "api-plan"
+    assert response.execution_run.status == "completed"
+    assert response.protein is not None
+    assert response.execution_run.final_protein_id == response.protein.protein_id
 
 
 def test_membrane_rejects_bad_schema_and_unsafe_input():

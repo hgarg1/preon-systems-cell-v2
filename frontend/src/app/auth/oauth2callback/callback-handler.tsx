@@ -19,12 +19,18 @@ export function OAuthCallbackHandler() {
     const errorParam = searchParams.get("error");
 
     if (errorParam) {
-      setError(`Google declined sign-in: ${errorParam}`);
-      return;
+      const timeout = window.setTimeout(
+        () => setError(`Google declined sign-in: ${errorParam}`),
+        0,
+      );
+      return () => window.clearTimeout(timeout);
     }
     if (!code) {
-      setError("No authorization code received from Google.");
-      return;
+      const timeout = window.setTimeout(
+        () => setError("No authorization code received from Google."),
+        0,
+      );
+      return () => window.clearTimeout(timeout);
     }
 
     exchangeOAuthCode("google", code, state)

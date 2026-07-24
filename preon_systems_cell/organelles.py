@@ -6,8 +6,8 @@ Covers the protein lifecycle within a single cell execution:
 """
 from __future__ import annotations
 
-import asyncio
 from collections.abc import Awaitable, Callable
+from threading import RLock
 from typing import Any, Protocol
 
 from preon_systems_cell.models import (
@@ -35,7 +35,34 @@ class CellWorkingState:
 
     def __init__(self) -> None:
         self._slots: dict[str, CytoplasmEntry] = {}
-        self._lock = asyncio.Lock()
+        self._lock = RLock()
+
+    def write_sync(
+        self,
+        slot: str,
+        value: Any,
+        *,
+        metadata: dict[str, Any] | None = None,
+        overwrite: bool = True,
+    ) -> None:
+        with self._lock:
+            if not overwrite and slot in self._slots:
+                raise KeyError(f"Cytoplasm slot already exists: {slot}")
+            self._slots[slot] = CytoplasmEntry(value=value, metadata=metadata or {})
+
+    def read_sync(self, slot: str) -> Any:
+        with self._lock:
+            if slot not in self._slots:
+                raise KeyError(f"Cytoplasm slot not found: {slot}")
+            return self._slots[slot].value
+
+    def delete_sync(self, slot: str) -> None:
+        with self._lock:
+            self._slots.pop(slot, None)
+
+    def snapshot_sync(self) -> CytoplasmSnapshot:
+        with self._lock:
+            return CytoplasmSnapshot(slots=dict(self._slots))
 
     async def write(
         self,
@@ -45,24 +72,16 @@ class CellWorkingState:
         metadata: dict[str, Any] | None = None,
         overwrite: bool = True,
     ) -> None:
-        async with self._lock:
-            if not overwrite and slot in self._slots:
-                raise KeyError(f"Cytoplasm slot already exists: {slot}")
-            self._slots[slot] = CytoplasmEntry(value=value, metadata=metadata or {})
+        self.write_sync(slot, value, metadata=metadata, overwrite=overwrite)
 
     async def read(self, slot: str) -> Any:
-        async with self._lock:
-            if slot not in self._slots:
-                raise KeyError(f"Cytoplasm slot not found: {slot}")
-            return self._slots[slot].value
+        return self.read_sync(slot)
 
     async def delete(self, slot: str) -> None:
-        async with self._lock:
-            self._slots.pop(slot, None)
+        self.delete_sync(slot)
 
     async def snapshot(self) -> CytoplasmSnapshot:
-        async with self._lock:
-            return CytoplasmSnapshot(slots=dict(self._slots))
+        return self.snapshot_sync()
 
 
 class Proteasome:

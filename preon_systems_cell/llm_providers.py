@@ -15,8 +15,14 @@ OpenAI-compatible path gives a plain, non-agentic single completion call.
 from __future__ import annotations
 
 import os
-import time
-from typing import Callable, Protocol, runtime_checkable
+from typing import Any, Callable, Protocol, runtime_checkable
+
+from preon_systems_cell.resilience import (
+    CircuitOpen,
+    ProviderCircuitRegistry,
+    RetryBudget,
+    retry_bounded,
+)
 
 # Default model IDs per provider × model class.
 # Overridden by GenomeModule.llm_model_id when set.
@@ -68,23 +74,32 @@ def _retryable(exc: Exception) -> bool:
     return False
 
 
-def _with_retry(fn: Callable[[], str], max_attempts: int = 2, base_delay: float = 1.0) -> str:
-    """Run fn(), retrying once on transient provider errors with exponential back-off."""
-    for attempt in range(max_attempts):
-        try:
-            return fn()
-        except Exception as exc:
-            if attempt < max_attempts - 1 and _retryable(exc):
-                time.sleep(base_delay * (2 ** attempt))
-                continue
-            raise
-    raise RuntimeError("unreachable")  # satisfies type checker
+_CIRCUITS = ProviderCircuitRegistry()
+
+
+def _with_retry(fn: Callable[[], str], provider: str, max_attempts: int = 2) -> str:
+    """Run an idempotent completion within one retry budget and provider circuit."""
+    circuit = _CIRCUITS.for_provider(provider)
+    if not circuit.allow():
+        raise CircuitOpen(provider)
+    try:
+        result = retry_bounded(
+            fn,
+            budget=RetryBudget(max_attempts=max_attempts),
+            is_retryable=_retryable,
+        )
+    except Exception:
+        circuit.failure()
+        raise
+    circuit.success()
+    return result
 
 
 @runtime_checkable
 class LlmAdapter(Protocol):
     def complete(
-        self, prompt: str, system: str | None = None, max_tokens: int = 2048, timeout_seconds: int = 30
+        self, prompt: str, system: str | None = None, max_tokens: int = 2048,
+        timeout_seconds: int = 30, response_schema: dict[str, Any] | None = None,
     ) -> str: ...
 
 
@@ -95,17 +110,29 @@ class _AnthropicAdapter:
         self._model = model_id
 
     def complete(
-        self, prompt: str, system: str | None = None, max_tokens: int = 2048, timeout_seconds: int = 30
+        self, prompt: str, system: str | None = None, max_tokens: int = 2048,
+        timeout_seconds: int = 30, response_schema: dict[str, Any] | None = None,
     ) -> str:
-        return _with_retry(lambda: self._create(prompt, system, max_tokens, timeout_seconds))
+        return _with_retry(
+            lambda: self._create(prompt, system, max_tokens, timeout_seconds, response_schema),
+            "anthropic",
+        )
 
-    def _create(self, prompt: str, system: str | None, max_tokens: int, timeout_seconds: int) -> str:
+    def _create(
+        self, prompt: str, system: str | None, max_tokens: int,
+        timeout_seconds: int, response_schema: dict[str, Any] | None,
+    ) -> str:
         msg = self._client.messages.create(
             model=self._model,
             max_tokens=max_tokens,
             system=system or "You are a helpful assistant.",
             messages=[{"role": "user", "content": prompt}],
             timeout=timeout_seconds,
+            **(
+                {"output_config": {"format": {"type": "json_schema", "schema": response_schema}}}
+                if response_schema is not None
+                else {}
+            ),
         )
         return msg.content[0].text  # type: ignore[union-attr]
 
@@ -120,13 +147,21 @@ class _OpenAIAdapter:
             kwargs["base_url"] = base_url
         self._client = openai.OpenAI(**kwargs)
         self._model = model_id
+        self._provider = "grok" if base_url else "openai"
 
     def complete(
-        self, prompt: str, system: str | None = None, max_tokens: int = 2048, timeout_seconds: int = 30
+        self, prompt: str, system: str | None = None, max_tokens: int = 2048,
+        timeout_seconds: int = 30, response_schema: dict[str, Any] | None = None,
     ) -> str:
-        return _with_retry(lambda: self._create(prompt, system, max_tokens, timeout_seconds))
+        return _with_retry(
+            lambda: self._create(prompt, system, max_tokens, timeout_seconds, response_schema),
+            self._provider,
+        )
 
-    def _create(self, prompt: str, system: str | None, max_tokens: int, timeout_seconds: int) -> str:
+    def _create(
+        self, prompt: str, system: str | None, max_tokens: int,
+        timeout_seconds: int, response_schema: dict[str, Any] | None,
+    ) -> str:
         messages = []
         if system:
             messages.append({"role": "system", "content": system})
@@ -136,6 +171,20 @@ class _OpenAIAdapter:
             messages=messages,  # type: ignore[arg-type]
             max_tokens=max_tokens,
             timeout=timeout_seconds,
+            **(
+                {
+                    "response_format": {
+                        "type": "json_schema",
+                        "json_schema": {
+                            "name": "protein_output",
+                            "strict": True,
+                            "schema": response_schema,
+                        },
+                    }
+                }
+                if response_schema is not None
+                else {}
+            ),
         )
         return resp.choices[0].message.content or ""
 
@@ -148,18 +197,39 @@ class _GeminiAdapter:
         self._model_id = model_id
 
     def complete(
-        self, prompt: str, system: str | None = None, max_tokens: int = 2048, timeout_seconds: int = 30
+        self, prompt: str, system: str | None = None, max_tokens: int = 2048,
+        timeout_seconds: int = 30, response_schema: dict[str, Any] | None = None,
     ) -> str:
-        return _with_retry(lambda: self._create(prompt, system, max_tokens, timeout_seconds))
+        return _with_retry(
+            lambda: self._create(prompt, system, max_tokens, timeout_seconds, response_schema),
+            "gemini",
+        )
 
-    def _create(self, prompt: str, system: str | None, max_tokens: int, timeout_seconds: int) -> str:
+    def _create(
+        self, prompt: str, system: str | None, max_tokens: int,
+        timeout_seconds: int, response_schema: dict[str, Any] | None,
+    ) -> str:
         full_prompt = f"{system}\n\n{prompt}" if system else prompt
         resp = self._model.generate_content(
             full_prompt,
-            generation_config={"max_output_tokens": max_tokens},
+            generation_config={
+                "max_output_tokens": max_tokens,
+                **(
+                    {
+                        "response_mime_type": "application/json",
+                        "response_schema": response_schema,
+                    }
+                    if response_schema is not None
+                    else {}
+                ),
+            },
             request_options={"timeout": timeout_seconds},
         )
         return resp.text
+
+
+def provider_circuit_states() -> dict[str, str]:
+    return _CIRCUITS.states()
 
 
 def get_adapter(provider: str, model_class: str, model_id: str | None = None) -> LlmAdapter | None:

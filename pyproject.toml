@@ -6,7 +6,7 @@ build-backend = "setuptools.build_meta"
 include = ["preon_systems_cell*"]
 
 [tool.setuptools.package-data]
-preon_systems_cell = ["static/*", "static/vendor/*", "storage/sql/*.sql", "bones/defaults.yaml"]
+preon_systems_cell = ["static/*", "static/vendor/*", "storage/sql/*.sql", "storage/sql/migrations/*.sql", "bones/defaults.yaml"]
 
 [project]
 name = "preon-systems-cell"
@@ -34,6 +34,10 @@ dev = [
 postgres = [
     "asyncpg>=0.29",
 ]
+infrastructure = [
+    "asyncpg>=0.29",
+    "boto3>=1.35",
+]
 anthropic = [
     "anthropic>=0.40",
 ]
@@ -56,3 +60,6 @@ organism-web = "preon_systems_cell.web:main"
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
+markers = [
+    "integration: opt-in tests requiring real PostgreSQL or S3-compatible endpoints",
+]
