@@ -129,3 +129,20 @@ MODEL_REGISTRY: list[ProviderModelProfile] = [
         allowed_data_classes=["public", "internal"],
     ),
 ]
+
+
+def provider_allows_data_class(
+    provider: str,
+    model_class: str,
+    model_id: str | None,
+    data_class: DataClass,
+) -> bool:
+    if provider == "stub":
+        return True
+    return any(
+        profile.provider == provider
+        and profile.model_class == model_class
+        and (model_id is None or profile.model_id == model_id)
+        and data_class in profile.allowed_data_classes
+        for profile in MODEL_REGISTRY
+    )

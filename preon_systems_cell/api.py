@@ -10,6 +10,7 @@ from preon_systems_cell.models import (
     ApplyGrowthTemplateRequest,
     Capability,
     CellRecord,
+    CellExecutionRun,
     Contract,
     CreateBoneProposalRequest,
     CreateCapabilityRequest,
@@ -33,6 +34,7 @@ from preon_systems_cell.models import (
     GenomeValidationResponse,
     MaintenanceJobRun,
     MemoryRecord,
+    MemoryPolicyVersion,
     OrganismDetailResponse,
     OrganismRecord,
     OxygenGrantRequest,
@@ -41,6 +43,7 @@ from preon_systems_cell.models import (
     PolicyVersion,
     ReproductionNegotiateRequest,
     ReplayRun,
+    ResourceGrant,
     ResourceBudget,
     ReviewRequest,
     RuntimeAlert,
@@ -52,8 +55,10 @@ from preon_systems_cell.models import (
     ResolveStructureRequestRequest,
     SubmitSignalRequest,
     SubmitSignalResponse,
+    TraceContext,
     UpdateCellRequest,
     ValidationReport,
+    UpdateMemoryPolicyRequest,
     utc_now,
 )
 
@@ -165,10 +170,17 @@ def create_memory(organism_id: str, request: CreateMemoryRequest, owner_user_id:
         MemoryRecord(
             memory_id=new_id("memory"),
             organism_id=organism_id,
+            owner_user_id=owner_user_id,
             scope=request.scope,
             kind=request.kind,
+            memory_type=request.memory_type,
             payload=request.payload,
             confidence=request.confidence,
+            importance=request.importance,
+            data_class=request.data_class,
+            ttl_seconds=request.ttl_seconds,
+            supersedes_memory_id=request.supersedes_memory_id,
+            promotion_reason="operator_admission",
         )
     )
 
@@ -206,17 +218,61 @@ def submit_signal(
         payload=request.payload,
         context_refs=request.context_refs,
         priority=request.priority,
+        data_class=request.data_class,
+        trace_context=TraceContext(organism_id=organism_id),
         metadata=request.metadata,
     )
     decision, cell, protein, events, structure_request = RUNTIME.submit_signal(signal)
+    execution_run = next(
+        (
+            run
+            for run in reversed(RUNTIME.stores.cell_execution_runs.get(organism_id, []))
+            if run.signal_id == signal.signal_id
+        ),
+        None,
+    )
     return SubmitSignalResponse(
         signal=signal,
         membrane_decision=decision,
         cell=cell,
         protein=protein,
+        execution_run=execution_run,
         events=events,
         structure_request=structure_request,
     )
+
+
+def list_cell_execution_runs(
+    organism_id: str,
+    owner_user_id: str | None = None,
+) -> list[CellExecutionRun] | None:
+    if get_organism_detail(organism_id, owner_user_id) is None:
+        return None
+    return sorted(
+        RUNTIME.stores.cell_execution_runs.get(organism_id, []),
+        key=lambda run: run.created_at,
+        reverse=True,
+    )
+
+
+def maintain_memory(
+    organism_id: str,
+    owner_user_id: str | None = None,
+) -> dict[str, int] | None:
+    if get_organism_detail(organism_id, owner_user_id) is None:
+        return None
+    return RUNTIME.maintain_memory(organism_id)
+
+
+def get_cell_execution_run(
+    organism_id: str,
+    run_id: str,
+    owner_user_id: str | None = None,
+) -> CellExecutionRun | None:
+    runs = list_cell_execution_runs(organism_id, owner_user_id)
+    if runs is None:
+        return None
+    return next((run for run in runs if run.run_id == run_id), None)
 
 
 def create_contract(request: CreateContractRequest, owner_user_id: str | None = None) -> Contract:
@@ -649,38 +705,122 @@ def reincarnate_soul(soul_id: str, owner_user_id: str | None = None) -> Organism
     return RUNTIME.reincarnate_soul(soul_id, owner_user_id)
 
 
-def list_bones(owner_user_id: str | None = None):
+def list_bones(owner_user_id: str | None = None, organism_id: str | None = None):
     bones = RUNTIME.stores.bone_structures.values()
     if owner_user_id is not None:
         bones = [bone for bone in bones if bone.owner_user_id == owner_user_id]
+    if organism_id is not None:
+        bones = [bone for bone in bones if bone.organism_id == organism_id]
     return sorted(bones, key=lambda item: item.created_at, reverse=True)
 
 
-def list_structure_proposals(owner_user_id: str | None = None):
+def list_structure_proposals(owner_user_id: str | None = None, organism_id: str | None = None):
     proposals = RUNTIME.stores.structure_proposals.values()
     if owner_user_id is not None:
         proposals = [proposal for proposal in proposals if proposal.owner_user_id == owner_user_id]
+    if organism_id is not None:
+        proposals = [proposal for proposal in proposals if proposal.organism_id == organism_id]
     return sorted(proposals, key=lambda item: item.created_at, reverse=True)
+
+
+def list_resource_grants(
+    organism_id: str,
+    owner_user_id: str | None = None,
+) -> list[ResourceGrant] | None:
+    if get_organism_detail(organism_id, owner_user_id) is None:
+        return None
+    grants = [
+        grant
+        for grant in RUNTIME.stores.resource_grants.values()
+        if grant.organism_id == organism_id
+        and (owner_user_id is None or grant.owner_user_id == owner_user_id)
+    ]
+    return sorted(grants, key=lambda item: item.created_at, reverse=True)
 
 
 def create_bone_proposal(request: CreateBoneProposalRequest, owner_user_id: str | None = None) -> StructureProposal:
     return RUNTIME.create_bone_proposal(
         StructureProposal(
             proposal_id=new_id("proposal"),
+            organism_id=request.organism_id,
             owner_user_id=owner_user_id,
             requested_by=request.requested_by or owner_user_id,
             name=request.name,
             structure_type=request.structure_type,
+            operation=request.operation,
+            provider=request.provider,
             definition=request.definition,
+            idempotency_key=request.idempotency_key,
+            target_resource_id=request.target_resource_id,
+            target_cell_id=request.target_cell_id,
+            requested_permissions=request.requested_permissions,
         )
     )
 
 
-def decide_structure_proposal(proposal_id: str, request: DecideProposalRequest, approved: bool, owner_user_id: str | None = None) -> StructureProposal | None:
+def decide_structure_proposal(
+    proposal_id: str,
+    request: DecideProposalRequest,
+    approved: bool,
+    owner_user_id: str | None = None,
+    *,
+    defer_apply: bool = False,
+) -> StructureProposal | None:
     proposal = RUNTIME.stores.structure_proposals.get(proposal_id)
     if proposal is None or (owner_user_id is not None and proposal.owner_user_id != owner_user_id):
         return None
-    return RUNTIME.decide_structure_proposal(proposal_id, approved, request.reason, owner_user_id)
+    return RUNTIME.decide_structure_proposal(
+        proposal_id,
+        approved,
+        request.reason,
+        owner_user_id,
+        request.plan_digest,
+        defer_apply,
+    )
+
+
+def reconcile_skeleton(
+    organism_id: str,
+    owner_user_id: str | None = None,
+):
+    if get_organism_detail(organism_id, owner_user_id) is None:
+        return None
+    return RUNTIME.reconcile_skeleton(organism_id)
+
+
+def list_memory_policy_versions(
+    organism_id: str,
+    owner_user_id: str | None = None,
+) -> list[MemoryPolicyVersion] | None:
+    if get_organism_detail(organism_id, owner_user_id) is None:
+        return None
+    return RUNTIME.list_memory_policy_versions(organism_id)
+
+
+def update_memory_policy(
+    organism_id: str,
+    request: UpdateMemoryPolicyRequest,
+    owner_user_id: str | None = None,
+) -> MemoryPolicyVersion | None:
+    if get_organism_detail(organism_id, owner_user_id) is None:
+        return None
+    return RUNTIME.update_memory_policy(organism_id, request, owner_user_id)
+
+
+def revoke_resource_grant(
+    organism_id: str,
+    grant_id: str,
+    owner_user_id: str | None = None,
+) -> ResourceGrant | None:
+    if get_organism_detail(organism_id, owner_user_id) is None:
+        return None
+    grant = RUNTIME.stores.resource_grants.get(grant_id)
+    if grant is None or grant.organism_id != organism_id:
+        return None
+    try:
+        return RUNTIME.revoke_resource_grant(grant_id, owner_user_id)
+    except KeyError:
+        return None
 
 
 def list_reviews(owner_user_id: str | None = None) -> list[ReviewRequest]:

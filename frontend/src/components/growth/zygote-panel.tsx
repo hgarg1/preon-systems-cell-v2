@@ -24,7 +24,6 @@ export function ZygotePanel({
   const [motherIndex, setMotherIndex] = useState(0);
   const [fatherIndex, setFatherIndex] = useState(organisms.length > 1 ? 1 : 0);
   const [zygote, setZygote] = useState<ZygoteRecord | null>(null);
-  const [negotiation, setNegotiation] = useState<Record<string, unknown> | null>(null);
   const [healthData, setHealthData] = useState<Record<string, unknown> | null>(null);
   const [busy, setBusy] = useState<string | null>(null);
   const [output, setOutput] = useState<unknown>(null);
@@ -38,7 +37,6 @@ export function ZygotePanel({
     try {
       if (action === "negotiate") {
         const neg = await negotiateReproduction({ motherOrganismId: mother.organism_id, fatherOrganismId: father.organism_id });
-        setNegotiation(neg);
         setOutput({ negotiation: neg });
       } else if (action === "create") {
         const z = await createZygote({ motherOrganismId: mother.organism_id, fatherOrganismId: father.organism_id });

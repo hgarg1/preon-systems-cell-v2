@@ -7,24 +7,30 @@ import os
 from pathlib import Path
 from typing import Any
 
-from preon_systems_cell.engine import RuntimeStores
+from preon_systems_cell.runtime.stores import RuntimeStores
 from preon_systems_cell.models import (
     BoneStructureRecord,
+    CellExecutionRun,
     CellDivisionRecord,
     CellRecord,
     Contract,
     CytoskeletonTopology,
+    ExecutionStepResult,
     FoodIntake,
     Genome,
+    MemoryRecord,
+    MemoryPolicyVersion,
     OrganRecord,
     OrganellePipeline,
     OrganismRecord,
     OxygenProfile,
     Protein,
+    ResourceGrant,
     RuntimeEvent,
     Signal,
     SoulSnapshot,
     StructureProposal,
+    StructuralEffect,
     StructureRequest,
     TissueRecord,
     UmbilicalCord,
@@ -40,6 +46,7 @@ except ImportError:  # pragma: no cover - optional dependency guard
 
 SQL_DIR = Path(__file__).resolve().parent / "sql"
 SCHEMA_PATH = SQL_DIR / "schema.sql"
+MIGRATIONS_DIR = SQL_DIR / "migrations"
 logger = logging.getLogger("preon_systems_cell.storage.postgres")
 
 
@@ -91,9 +98,70 @@ class PostgresRuntimeStore:
     async def close(self) -> None:
         await self._pool.close()
 
+    async def claim_structural_effects(
+        self,
+        worker_id: str,
+        *,
+        limit: int = 10,
+        lease_seconds: int = 30,
+    ) -> list[dict[str, Any]]:
+        """Atomically claim due effects across replicas using skip-locked leases."""
+
+        async with self._pool.acquire() as connection:
+            rows = await connection.fetch(
+                """
+                WITH candidates AS (
+                    SELECT effect_id
+                    FROM structural_effects
+                    WHERE (
+                        status = 'pending' AND next_attempt_at <= now()
+                    ) OR (
+                        status = 'processing' AND lease_expires_at <= now()
+                    )
+                    ORDER BY next_attempt_at, created_at
+                    FOR UPDATE SKIP LOCKED
+                    LIMIT $1
+                )
+                UPDATE structural_effects AS effect
+                SET status = 'processing',
+                    lease_owner = $2,
+                    lease_expires_at = now() + make_interval(secs => $3),
+                    attempt_count = effect.attempt_count + 1,
+                    updated_at = now()
+                FROM candidates
+                WHERE effect.effect_id = candidates.effect_id
+                RETURNING effect.*
+                """,
+                max(1, limit),
+                worker_id,
+                max(1, lease_seconds),
+            )
+        return [dict(row) for row in rows]
+
     async def apply_schema(self) -> None:
         async with self._pool.acquire() as connection:
             await connection.execute(SCHEMA_PATH.read_text(encoding="utf-8"))
+            await connection.execute(
+                """
+                CREATE TABLE IF NOT EXISTS schema_migrations (
+                    version TEXT PRIMARY KEY,
+                    applied_at TIMESTAMPTZ NOT NULL DEFAULT now()
+                )
+                """
+            )
+            for path in sorted(MIGRATIONS_DIR.glob("*.sql")):
+                already = await connection.fetchval(
+                    "SELECT 1 FROM schema_migrations WHERE version = $1",
+                    path.stem,
+                )
+                if already:
+                    continue
+                async with connection.transaction():
+                    await connection.execute(path.read_text(encoding="utf-8"))
+                    await connection.execute(
+                        "INSERT INTO schema_migrations (version) VALUES ($1)",
+                        path.stem,
+                    )
 
     async def load_stores(self) -> RuntimeStores:
         stores = RuntimeStores()
@@ -156,6 +224,7 @@ class PostgresRuntimeStore:
                 stores.cells.setdefault(cell.organism_id, []).append(cell)
 
             for row in await connection.fetch("SELECT * FROM signals ORDER BY created_at"):
+                row_data = dict(row)
                 signal = Signal(
                     signal_id=row["signal_id"],
                     organism_id=row["organism_id"],
@@ -164,12 +233,15 @@ class PostgresRuntimeStore:
                     payload=_decode_json(row["payload"]),
                     context_refs=_decode_json(row["context_refs"]),
                     priority=row["priority"],
+                    data_class=row_data.get("data_class", "internal"),
+                    trace_context=_decode_json(row_data.get("trace_context")),
                     metadata=_decode_json(row["metadata"]),
                     created_at=row["created_at"],
                 )
                 stores.signals.setdefault(signal.organism_id, []).append(signal)
 
             for row in await connection.fetch("SELECT * FROM proteins ORDER BY created_at"):
+                row_data = dict(row)
                 protein = Protein(
                     protein_id=row["protein_id"],
                     organism_id=row["organism_id"],
@@ -178,6 +250,8 @@ class PostgresRuntimeStore:
                     payload=_decode_json(row["payload"]),
                     confidence=row["confidence"],
                     status=row["status"],
+                    data_class=row_data.get("data_class", "internal"),
+                    trace_context=_decode_json(row_data.get("trace_context")),
                     validation_report=_decode_json(row["validation_report"]),
                     created_at=row["created_at"],
                 )
@@ -204,6 +278,7 @@ class PostgresRuntimeStore:
                 stores.contracts[contract.contract_id] = contract
 
             for row in await connection.fetch("SELECT * FROM runtime_events ORDER BY created_at"):
+                row_data = dict(row)
                 event = RuntimeEvent(
                     event_id=row["event_id"],
                     organism_id=row["organism_id"],
@@ -213,6 +288,8 @@ class PostgresRuntimeStore:
                     contract_id=row["contract_id"],
                     type=row["type"],
                     message=row["message"],
+                    data_class=row_data.get("data_class", "internal"),
+                    trace_context=_decode_json(row_data.get("trace_context")),
                     values=_decode_json(row["values"]),
                     created_at=row["created_at"],
                 )
@@ -229,6 +306,44 @@ class PostgresRuntimeStore:
                     created_at=row["created_at"],
                 )
                 stores.structure_requests.setdefault(request.organism_id, []).append(request)
+
+            for row in await connection.fetch("SELECT * FROM memory_records ORDER BY created_at"):
+                row_data = dict(row)
+                memory = MemoryRecord(
+                    memory_id=row["memory_id"],
+                    organism_id=row["organism_id"],
+                    owner_user_id=row_data.get("owner_user_id"),
+                    scope=row_data.get("scope", "organism"),
+                    kind=row["kind"],
+                    memory_type=row_data.get("memory_type", "episodic"),
+                    payload=_decode_json(row["payload"]),
+                    source_signal_id=row_data.get("source_signal_id"),
+                    source_run_id=row_data.get("source_run_id"),
+                    source_protein_ids=_decode_json(row_data.get("source_protein_ids", "[]")),
+                    confidence=row_data.get("confidence", 1.0),
+                    importance=row_data.get("importance", 0.5),
+                    data_class=row_data.get("data_class", "internal"),
+                    trace_context=_decode_json(row_data.get("trace_context")),
+                    admission_status=row_data.get("admission_status", "admitted"),
+                    promotion_reason=row_data.get("promotion_reason", "legacy_import"),
+                    content_hash=row_data.get("content_hash", ""),
+                    ttl_seconds=row_data.get("ttl_seconds"),
+                    last_accessed_at=row_data.get("last_accessed_at"),
+                    access_count=row_data.get("access_count", 0),
+                    supersedes_memory_id=row_data.get("supersedes_memory_id"),
+                    superseded_by_memory_id=row_data.get("superseded_by_memory_id"),
+                    storage_resource_id=row_data.get("storage_resource_id"),
+                    admission_policy_version_id=row_data.get("admission_policy_version_id"),
+                    status=row_data.get("status", "active"),
+                    version=row_data.get("version", 1),
+                    created_at=row["created_at"],
+                    updated_at=row_data.get("updated_at", row["created_at"]),
+                )
+                stores.memory_records.setdefault(memory.organism_id, []).append(memory)
+
+            for row in await connection.fetch("SELECT * FROM memory_policy_versions ORDER BY organism_id, version"):
+                policy = MemoryPolicyVersion(**dict(row))
+                stores.memory_policy_versions.setdefault(policy.organism_id, []).append(policy)
 
             for row in await connection.fetch("SELECT * FROM zygotes ORDER BY created_at"):
                 zygote = ZygoteRecord(
@@ -330,12 +445,20 @@ class PostgresRuntimeStore:
                 stores.souls[soul.soul_id] = soul
 
             for row in await connection.fetch("SELECT * FROM bone_structures ORDER BY created_at"):
+                row_data = dict(row)
                 bone = BoneStructureRecord(
                     bone_id=row["bone_id"],
+                    organism_id=row_data.get("organism_id"),
                     owner_user_id=row["owner_user_id"],
                     name=row["name"],
                     structure_type=row["structure_type"],
                     definition=_decode_json(row["definition"]),
+                    provider=row_data.get("provider", "memory"),
+                    provider_resource_ref=row_data.get("provider_resource_ref"),
+                    observed_state=_decode_json(row_data.get("observed_state", "{}")),
+                    generation=row_data.get("generation", 1),
+                    health=row_data.get("health", "unknown"),
+                    created_by_cell_id=row_data.get("created_by_cell_id"),
                     status=row["status"],
                     created_at=row["created_at"],
                     updated_at=row["updated_at"],
@@ -343,19 +466,63 @@ class PostgresRuntimeStore:
                 stores.bone_structures[bone.bone_id] = bone
 
             for row in await connection.fetch("SELECT * FROM structure_proposals ORDER BY created_at"):
+                row_data = dict(row)
                 proposal = StructureProposal(
                     proposal_id=row["proposal_id"],
+                    organism_id=row_data.get("organism_id"),
                     owner_user_id=row["owner_user_id"],
                     requested_by=row["requested_by"],
+                    proposed_by_cell_id=row_data.get("proposed_by_cell_id"),
                     name=row["name"],
                     structure_type=row["structure_type"],
+                    operation=row_data.get("operation", "grow"),
+                    provider=row_data.get("provider", "memory"),
                     definition=_decode_json(row["definition"]),
+                    plan=_decode_json(row_data.get("plan", "{}")),
+                    plan_digest=row_data.get("plan_digest"),
+                    idempotency_key=row_data.get("idempotency_key"),
+                    target_resource_id=row_data.get("target_resource_id"),
+                    target_cell_id=row_data.get("target_cell_id"),
+                    requested_permissions=_decode_json(row_data.get("requested_permissions", "[]")),
                     status=row["status"],
+                    apply_status=row_data.get("apply_status", "pending"),
+                    resulting_bone_id=row_data.get("resulting_bone_id"),
+                    source_run_id=row_data.get("source_run_id"),
+                    source_protein_ids=_decode_json(row_data.get("source_protein_ids", "[]")),
                     decision_reason=row["decision_reason"],
                     created_at=row["created_at"],
                     decided_at=row["decided_at"],
+                    applied_at=row_data.get("applied_at"),
                 )
                 stores.structure_proposals[proposal.proposal_id] = proposal
+
+            for row in await connection.fetch("SELECT * FROM structural_effects ORDER BY created_at"):
+                row_data = dict(row)
+                effect = StructuralEffect(
+                    **{
+                        **row_data,
+                        "source_protein_ids": _decode_json(row_data.get("source_protein_ids", "[]")),
+                    }
+                )
+                stores.structural_effects[effect.effect_id] = effect
+
+            for row in await connection.fetch("SELECT * FROM resource_grants ORDER BY created_at"):
+                grant = ResourceGrant(
+                    grant_id=row["grant_id"],
+                    organism_id=row["organism_id"],
+                    owner_user_id=row["owner_user_id"],
+                    resource_id=row["resource_id"],
+                    cell_id=row["cell_id"],
+                    permissions=_decode_json(row["permissions"]),
+                    namespace=row["namespace"],
+                    provider=row["provider"],
+                    credential_ref=row["credential_ref"],
+                    status=row["status"],
+                    created_by_cell_id=row["created_by_cell_id"],
+                    created_at=row["created_at"],
+                    revoked_at=row["revoked_at"],
+                )
+                stores.resource_grants[grant.grant_id] = grant
 
             for row in await connection.fetch("SELECT * FROM organelle_pipelines ORDER BY created_at"):
                 pipeline = OrganellePipeline(
@@ -390,6 +557,36 @@ class PostgresRuntimeStore:
                     updated_at=row["updated_at"],
                 )
                 stores.cytoskeleton[topology.organism_id] = topology
+
+            run_rows = await connection.fetch("SELECT * FROM cell_execution_runs ORDER BY created_at")
+            for row in run_rows:
+                steps = await connection.fetch(
+                    "SELECT result FROM cell_execution_step_results WHERE run_id = $1 ORDER BY step_order",
+                    row["run_id"],
+                )
+                run = CellExecutionRun(
+                    run_id=row["run_id"],
+                    plan_id=row["plan_id"],
+                    organism_id=row["organism_id"],
+                    cell_id=row["cell_id"],
+                    signal_id=row["signal_id"],
+                    owner_user_id=row["owner_user_id"],
+                    status=row["status"],
+                    step_results=[ExecutionStepResult.model_validate(_decode_json(step["result"])) for step in steps],
+                    final_step_id=row["final_step_id"],
+                    final_protein_id=row["final_protein_id"],
+                    shared_state=_decode_json(row["shared_state"]),
+                    data_class=row["data_class"],
+                    trace_context=_decode_json(row["trace_context"]),
+                    created_at=row["created_at"],
+                    completed_at=row["completed_at"],
+                )
+                target_runs = (
+                    stores.skeletal_execution_runs
+                    if run.plan_id.startswith("skeletal:")
+                    else stores.cell_execution_runs
+                )
+                target_runs.setdefault(run.organism_id, []).append(run)
 
         stores.genomes.setdefault("genome-default", Genome(genome_id="genome-default"))
         return stores
@@ -521,15 +718,17 @@ class PostgresRuntimeStore:
                             """
                             INSERT INTO signals (
                                 signal_id, organism_id, actor, type, payload,
-                                context_refs, priority, metadata, created_at
+                                context_refs, priority, data_class, trace_context, metadata, created_at
                             )
-                            VALUES ($1, $2, $3::jsonb, $4, $5::jsonb, $6::jsonb, $7, $8::jsonb, $9)
+                            VALUES ($1, $2, $3::jsonb, $4, $5::jsonb, $6::jsonb, $7, $8, $9::jsonb, $10::jsonb, $11)
                             ON CONFLICT (signal_id) DO UPDATE SET
                                 actor = EXCLUDED.actor,
                                 type = EXCLUDED.type,
                                 payload = EXCLUDED.payload,
                                 context_refs = EXCLUDED.context_refs,
                                 priority = EXCLUDED.priority,
+                                data_class = EXCLUDED.data_class,
+                                trace_context = EXCLUDED.trace_context,
                                 metadata = EXCLUDED.metadata
                             """,
                             signal.signal_id,
@@ -539,6 +738,8 @@ class PostgresRuntimeStore:
                             _json(signal.payload),
                             _json(signal.context_refs),
                             signal.priority,
+                            signal.data_class.value,
+                            _json(signal.trace_context) if signal.trace_context else None,
                             _json(signal.metadata),
                             signal.created_at,
                         )
@@ -549,13 +750,15 @@ class PostgresRuntimeStore:
                             """
                             INSERT INTO proteins (
                                 protein_id, organism_id, source_signal_id, type, payload,
-                                confidence, status, validation_report, created_at
+                                confidence, status, data_class, trace_context, validation_report, created_at
                             )
-                            VALUES ($1, $2, $3, $4, $5::jsonb, $6, $7, $8::jsonb, $9)
+                            VALUES ($1, $2, $3, $4, $5::jsonb, $6, $7, $8, $9::jsonb, $10::jsonb, $11)
                             ON CONFLICT (protein_id) DO UPDATE SET
                                 payload = EXCLUDED.payload,
                                 confidence = EXCLUDED.confidence,
                                 status = EXCLUDED.status,
+                                data_class = EXCLUDED.data_class,
+                                trace_context = EXCLUDED.trace_context,
                                 validation_report = EXCLUDED.validation_report
                             """,
                             protein.protein_id,
@@ -565,8 +768,102 @@ class PostgresRuntimeStore:
                             _json(protein.payload),
                             protein.confidence,
                             protein.status.value,
+                            protein.data_class.value,
+                            _json(protein.trace_context) if protein.trace_context else None,
                             _json(protein.validation_report),
                             protein.created_at,
+                        )
+
+                for memories in stores.memory_records.values():
+                    for memory in memories:
+                        await connection.execute(
+                            """
+                            INSERT INTO memory_records (
+                                memory_id, organism_id, owner_user_id, scope, kind, memory_type,
+                                payload, source_signal_id, source_run_id, source_protein_ids,
+                                confidence, importance, data_class, trace_context, admission_status,
+                                promotion_reason, content_hash, ttl_seconds, last_accessed_at,
+                                access_count, supersedes_memory_id, superseded_by_memory_id,
+                                storage_resource_id, admission_policy_version_id,
+                                status, version, updated_at, created_at
+                            )
+                            VALUES (
+                                $1, $2, $3, $4, $5, $6, $7::jsonb, $8, $9, $10::jsonb,
+                                $11, $12, $13, $14::jsonb, $15, $16, $17, $18, $19,
+                                $20, $21, $22, $23, $24, $25, $26, $27, $28
+                            )
+                            ON CONFLICT (memory_id) DO UPDATE SET
+                                payload = EXCLUDED.payload,
+                                confidence = EXCLUDED.confidence,
+                                importance = EXCLUDED.importance,
+                                admission_status = EXCLUDED.admission_status,
+                                promotion_reason = EXCLUDED.promotion_reason,
+                                last_accessed_at = EXCLUDED.last_accessed_at,
+                                access_count = EXCLUDED.access_count,
+                                superseded_by_memory_id = EXCLUDED.superseded_by_memory_id,
+                                status = EXCLUDED.status,
+                                version = EXCLUDED.version,
+                                admission_policy_version_id = EXCLUDED.admission_policy_version_id,
+                                updated_at = EXCLUDED.updated_at
+                            """,
+                            memory.memory_id,
+                            memory.organism_id,
+                            memory.owner_user_id,
+                            memory.scope,
+                            memory.kind,
+                            memory.memory_type.value,
+                            _json(memory.payload),
+                            memory.source_signal_id,
+                            memory.source_run_id,
+                            _json(memory.source_protein_ids),
+                            memory.confidence,
+                            memory.importance,
+                            memory.data_class.value,
+                            _json(memory.trace_context) if memory.trace_context else None,
+                            memory.admission_status.value,
+                            memory.promotion_reason,
+                            memory.content_hash,
+                            memory.ttl_seconds,
+                            memory.last_accessed_at,
+                            memory.access_count,
+                            memory.supersedes_memory_id,
+                            memory.superseded_by_memory_id,
+                            memory.storage_resource_id,
+                            memory.admission_policy_version_id,
+                            memory.status.value,
+                            memory.version,
+                            memory.updated_at,
+                            memory.created_at,
+                        )
+
+                for versions in stores.memory_policy_versions.values():
+                    for policy in versions:
+                        await connection.execute(
+                            """
+                            INSERT INTO memory_policy_versions (
+                                policy_version_id, organism_id, owner_user_id, version,
+                                min_confidence, min_importance, default_ttl_seconds,
+                                context_token_budget, low_value_importance, low_value_age_days,
+                                allow_baseline_substrate_growth, status, created_by, created_at
+                            )
+                            VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14)
+                            ON CONFLICT (policy_version_id) DO UPDATE SET
+                                status = EXCLUDED.status
+                            """,
+                            policy.policy_version_id,
+                            policy.organism_id,
+                            policy.owner_user_id,
+                            policy.version,
+                            policy.min_confidence,
+                            policy.min_importance,
+                            policy.default_ttl_seconds,
+                            policy.context_token_budget,
+                            policy.low_value_importance,
+                            policy.low_value_age_days,
+                            policy.allow_baseline_substrate_growth,
+                            policy.status.value,
+                            policy.created_by,
+                            policy.created_at,
                         )
 
                 for contract in stores.contracts.values():
@@ -617,9 +914,9 @@ class PostgresRuntimeStore:
                             """
                             INSERT INTO runtime_events (
                                 event_id, organism_id, cell_id, signal_id, protein_id,
-                                contract_id, type, message, values, created_at
+                                contract_id, type, message, data_class, trace_context, values, created_at
                             )
-                            VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9::jsonb, $10)
+                            VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10::jsonb, $11::jsonb, $12)
                             ON CONFLICT (event_id) DO NOTHING
                             """,
                             event.event_id,
@@ -630,6 +927,8 @@ class PostgresRuntimeStore:
                             event.contract_id,
                             event.type.value,
                             event.message,
+                            event.data_class.value,
+                            _json(event.trace_context) if event.trace_context else None,
                             _json(event.values),
                             event.created_at,
                         )
@@ -834,19 +1133,36 @@ class PostgresRuntimeStore:
                 for bone in stores.bone_structures.values():
                     await connection.execute(
                         """
-                        INSERT INTO bone_structures (bone_id, owner_user_id, name, structure_type, definition, status, created_at, updated_at)
-                        VALUES ($1, $2, $3, $4, $5::jsonb, $6, $7, $8)
+                        INSERT INTO bone_structures (
+                            bone_id, organism_id, owner_user_id, name, structure_type,
+                            definition, provider, provider_resource_ref, observed_state,
+                            generation, health, created_by_cell_id, status, created_at, updated_at
+                        )
+                        VALUES ($1, $2, $3, $4, $5, $6::jsonb, $7, $8, $9::jsonb, $10, $11, $12, $13, $14, $15)
                         ON CONFLICT (bone_id) DO UPDATE SET
                             name = EXCLUDED.name,
                             definition = EXCLUDED.definition,
+                            provider = EXCLUDED.provider,
+                            provider_resource_ref = EXCLUDED.provider_resource_ref,
+                            observed_state = EXCLUDED.observed_state,
+                            generation = EXCLUDED.generation,
+                            health = EXCLUDED.health,
+                            created_by_cell_id = EXCLUDED.created_by_cell_id,
                             status = EXCLUDED.status,
                             updated_at = EXCLUDED.updated_at
                         """,
                         bone.bone_id,
+                        bone.organism_id,
                         bone.owner_user_id,
                         bone.name,
                         bone.structure_type,
                         _json(bone.definition),
+                        bone.provider,
+                        bone.provider_resource_ref,
+                        _json(bone.observed_state),
+                        bone.generation,
+                        bone.health.value,
+                        bone.created_by_cell_id,
                         bone.status.value,
                         bone.created_at,
                         bone.updated_at,
@@ -856,26 +1172,127 @@ class PostgresRuntimeStore:
                     await connection.execute(
                         """
                         INSERT INTO structure_proposals (
-                            proposal_id, owner_user_id, requested_by, name, structure_type,
-                            definition, status, decision_reason, created_at, decided_at
+                            proposal_id, organism_id, owner_user_id, requested_by, proposed_by_cell_id,
+                            name, structure_type, operation, provider, definition, plan, plan_digest,
+                            idempotency_key, target_resource_id, target_cell_id, requested_permissions,
+                            status, apply_status, resulting_bone_id, decision_reason,
+                            source_run_id, source_protein_ids, created_at, decided_at, applied_at
                         )
-                        VALUES ($1, $2, $3, $4, $5, $6::jsonb, $7, $8, $9, $10)
+                        VALUES (
+                            $1, $2, $3, $4, $5, $6, $7, $8, $9, $10::jsonb, $11::jsonb,
+                            $12, $13, $14, $15, $16::jsonb, $17, $18, $19, $20,
+                            $21, $22::jsonb, $23, $24, $25
+                        )
                         ON CONFLICT (proposal_id) DO UPDATE SET
                             definition = EXCLUDED.definition,
+                            plan = EXCLUDED.plan,
+                            plan_digest = EXCLUDED.plan_digest,
                             status = EXCLUDED.status,
+                            apply_status = EXCLUDED.apply_status,
+                            resulting_bone_id = EXCLUDED.resulting_bone_id,
                             decision_reason = EXCLUDED.decision_reason,
-                            decided_at = EXCLUDED.decided_at
+                            decided_at = EXCLUDED.decided_at,
+                            applied_at = EXCLUDED.applied_at
                         """,
                         proposal.proposal_id,
+                        proposal.organism_id,
                         proposal.owner_user_id,
                         proposal.requested_by,
+                        proposal.proposed_by_cell_id,
                         proposal.name,
                         proposal.structure_type,
+                        proposal.operation.value,
+                        proposal.provider,
                         _json(proposal.definition),
+                        _json(proposal.plan),
+                        proposal.plan_digest,
+                        proposal.idempotency_key,
+                        proposal.target_resource_id,
+                        proposal.target_cell_id,
+                        _json(proposal.requested_permissions),
                         proposal.status,
+                        proposal.apply_status,
+                        proposal.resulting_bone_id,
                         proposal.decision_reason,
+                        proposal.source_run_id,
+                        _json(proposal.source_protein_ids),
                         proposal.created_at,
                         proposal.decided_at,
+                        proposal.applied_at,
+                    )
+
+                for effect in stores.structural_effects.values():
+                    await connection.execute(
+                        """
+                        INSERT INTO structural_effects (
+                            effect_id, proposal_id, organism_id, owner_user_id, provider,
+                            plan_digest, idempotency_key, status, attempt_count, max_attempts,
+                            next_attempt_at, lease_owner, lease_expires_at, last_error,
+                            source_run_id, source_protein_ids, created_at, updated_at, completed_at
+                        )
+                        VALUES (
+                            $1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12,
+                            $13, $14, $15, $16::jsonb, $17, $18, $19
+                        )
+                        ON CONFLICT (effect_id) DO UPDATE SET
+                            status = EXCLUDED.status,
+                            attempt_count = EXCLUDED.attempt_count,
+                            next_attempt_at = EXCLUDED.next_attempt_at,
+                            lease_owner = EXCLUDED.lease_owner,
+                            lease_expires_at = EXCLUDED.lease_expires_at,
+                            last_error = EXCLUDED.last_error,
+                            updated_at = EXCLUDED.updated_at,
+                            completed_at = EXCLUDED.completed_at
+                        """,
+                        effect.effect_id,
+                        effect.proposal_id,
+                        effect.organism_id,
+                        effect.owner_user_id,
+                        effect.provider,
+                        effect.plan_digest,
+                        effect.idempotency_key,
+                        effect.status.value,
+                        effect.attempt_count,
+                        effect.max_attempts,
+                        effect.next_attempt_at,
+                        effect.lease_owner,
+                        effect.lease_expires_at,
+                        effect.last_error,
+                        effect.source_run_id,
+                        _json(effect.source_protein_ids),
+                        effect.created_at,
+                        effect.updated_at,
+                        effect.completed_at,
+                    )
+
+                for grant in stores.resource_grants.values():
+                    await connection.execute(
+                        """
+                        INSERT INTO resource_grants (
+                            grant_id, organism_id, owner_user_id, resource_id, cell_id,
+                            permissions, namespace, provider, credential_ref, status,
+                            created_by_cell_id, created_at, revoked_at
+                        )
+                        VALUES ($1, $2, $3, $4, $5, $6::jsonb, $7, $8, $9, $10, $11, $12, $13)
+                        ON CONFLICT (grant_id) DO UPDATE SET
+                            permissions = EXCLUDED.permissions,
+                            namespace = EXCLUDED.namespace,
+                            status = EXCLUDED.status,
+                            revoked_at = EXCLUDED.revoked_at
+                        """,
+                        grant.grant_id,
+                        grant.organism_id,
+                        grant.owner_user_id,
+                        grant.resource_id,
+                        grant.cell_id,
+                        _json(grant.permissions),
+                        grant.namespace,
+                        grant.provider,
+                        grant.credential_ref,
+                        grant.status,
+                        grant.created_by_cell_id,
+                        grant.created_at,
+                        grant.revoked_at,
                     )
 
                 for pipelines in stores.organelle_pipelines.values():
@@ -934,6 +1351,61 @@ class PostgresRuntimeStore:
                         _json(topology.cell_edges),
                         topology.updated_at,
                     )
+
+                all_execution_runs = [
+                    *stores.cell_execution_runs.values(),
+                    *stores.skeletal_execution_runs.values(),
+                ]
+                for runs in all_execution_runs:
+                    for run in runs:
+                        await connection.execute(
+                            """
+                            INSERT INTO cell_execution_runs (
+                                run_id, plan_id, organism_id, cell_id, signal_id, owner_user_id,
+                                status, final_step_id, final_protein_id, shared_state,
+                                data_class, trace_context, created_at, completed_at
+                            )
+                            VALUES (
+                                $1, $2, $3, $4, $5, $6, $7, $8, $9, $10::jsonb,
+                                $11, $12::jsonb, $13, $14
+                            )
+                            ON CONFLICT (run_id) DO UPDATE SET
+                                status = EXCLUDED.status,
+                                final_protein_id = EXCLUDED.final_protein_id,
+                                shared_state = EXCLUDED.shared_state,
+                                data_class = EXCLUDED.data_class,
+                                trace_context = EXCLUDED.trace_context,
+                                completed_at = EXCLUDED.completed_at
+                            """,
+                            run.run_id,
+                            run.plan_id,
+                            run.organism_id,
+                            run.cell_id,
+                            run.signal_id,
+                            run.owner_user_id,
+                            run.status,
+                            run.final_step_id,
+                            run.final_protein_id,
+                            _json(run.shared_state),
+                            run.data_class.value,
+                            _json(run.trace_context) if run.trace_context else None,
+                            run.created_at,
+                            run.completed_at,
+                        )
+                        for step_order, step in enumerate(run.step_results):
+                            await connection.execute(
+                                """
+                                INSERT INTO cell_execution_step_results (run_id, step_order, step_id, result)
+                                VALUES ($1, $2, $3, $4::jsonb)
+                                ON CONFLICT (run_id, step_order) DO UPDATE SET
+                                    step_id = EXCLUDED.step_id,
+                                    result = EXCLUDED.result
+                                """,
+                                run.run_id,
+                                step_order,
+                                step.step_id,
+                                _json(step),
+                            )
 
 
 def _json(value: Any) -> str:

@@ -10,14 +10,14 @@ def test_runtime_events_are_the_primary_analytics_stream():
     assert [event.type for event in response.events] == [
         "membrane",
         "lifecycle",
-        "cytoplasm",
-        "nucleus",
-        "mitochondria",
+            "cytoplasm",
+            "nucleus",
+            "memory",     # Phase 5B constructs bounded context before execution
+            "mitochondria",
         "ribosome",
         "bone",       # Osteocyte records bone execution after ribosome
         "protein",
         "golgi",
-        "lysosome",
-        "vacuole",
-        "memory",
-    ]
+            "lysosome",
+            "vacuole",
+        ]

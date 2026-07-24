@@ -47,6 +47,7 @@ from preon_systems_cell.api import (
     divide_cell,
     export_organism,
     get_genome,
+    get_cell_execution_run,
     get_memory,
     get_organism_detail,
     get_soul,
@@ -63,12 +64,14 @@ from preon_systems_cell.api import (
     list_capabilities,
     list_cells,
     list_cell_divisions,
+    list_cell_execution_runs,
     list_events,
     list_genome_versions,
     list_genomes,
     list_memory,
     list_organisms,
     list_organs,
+    list_resource_grants,
     list_reviews,
     list_souls,
     list_structure_proposals,
@@ -76,12 +79,16 @@ from preon_systems_cell.api import (
     list_tissues,
     list_zygotes,
     maintenance_status,
+    maintain_memory,
+    list_memory_policy_versions,
     mark_cell_dead,
     negotiate_reproduction,
     preview_genome,
     replay_signal,
     reincarnate_soul,
     resolve_structure_request,
+    revoke_resource_grant,
+    reconcile_skeleton,
     run_maintenance,
     runtime_metrics,
     self_consume_cell,
@@ -91,6 +98,7 @@ from preon_systems_cell.api import (
     update_cell,
     update_genome_division_policy,
     update_policies,
+    update_memory_policy,
     validate_genome,
     validate_contract_adapter,
     validate_policies,
@@ -101,6 +109,8 @@ from preon_systems_cell.email import (
     send_email,
     verification_email,
 )
+from preon_systems_cell.execution_service import SharedExecutionService
+from preon_systems_cell.resilience import FailureType, RuntimeFailure
 from preon_systems_cell.auth import (
     AuthSessionResponse,
     AuthUser,
@@ -157,6 +167,7 @@ from preon_systems_cell.models import (
     ResolveStructureRequestRequest,
     SubmitSignalRequest,
     UpdateCellRequest,
+    UpdateMemoryPolicyRequest,
     UpdateDivisionPolicyRequest,
 )
 from preon_systems_cell.storage.manager import StorageManager
@@ -176,17 +187,44 @@ class OAuthCallbackRequest(BaseModel):
 
 
 def create_app() -> FastAPI:
+    execution_service = SharedExecutionService()
+
     @asynccontextmanager
     async def lifespan(app: FastAPI):
         manager = await StorageManager.create()
         app.state.storage = manager
         app.state.auth = manager.auth
+        app.state.execution_service = execution_service
         if manager.postgres is not None:
             RUNTIME.stores = await manager.postgres.load_stores()
             RUNTIME._bind_services()
+        stop_effect_worker = asyncio.Event()
+
+        async def structural_effect_worker() -> None:
+            while not stop_effect_worker.is_set():
+                try:
+                    completed = await execution_service.run(
+                        "structural-outbox",
+                        RUNTIME.process_pending_structural_effects,
+                        10,
+                        timeout_seconds=30,
+                    )
+                    if completed and manager.postgres is not None:
+                        await manager.postgres.save_stores(RUNTIME.stores)
+                except Exception:
+                    pass
+                try:
+                    await asyncio.wait_for(stop_effect_worker.wait(), timeout=0.25)
+                except TimeoutError:
+                    continue
+
+        effect_worker_task = asyncio.create_task(structural_effect_worker())
         try:
             yield
         finally:
+            stop_effect_worker.set()
+            await effect_worker_task
+            execution_service.close()
             await manager.close()
 
     app = FastAPI(
@@ -196,6 +234,7 @@ def create_app() -> FastAPI:
         lifespan=lifespan,
     )
     app.state.auth = InMemoryAuthRepository()
+    app.state.execution_service = execution_service
     app.mount("/static", StaticFiles(directory=STATIC_DIR), name="static")
 
     @app.middleware("http")
@@ -545,19 +584,120 @@ def create_app() -> FastAPI:
     async def structure_proposals_route(user: AuthUser = Depends(require_current_user)) -> dict[str, object]:
         return {"proposals": [proposal.model_dump(mode="json") for proposal in list_structure_proposals(user.id)]}
 
+    @app.get("/api/organisms/{organism_id}/skeleton")
+    async def organism_skeleton_route(
+        organism_id: str,
+        user: AuthUser = Depends(require_current_user),
+    ) -> dict[str, object]:
+        detail = get_organism_detail(organism_id, user.id)
+        if detail is None:
+            raise HTTPException(status_code=404, detail="organism not found")
+        grants = list_resource_grants(organism_id, user.id) or []
+        return {
+            "cells": [
+                cell.model_dump(mode="json")
+                for cell in detail.cells
+                if cell.tissue_id == "skeletal"
+            ],
+            "resources": [
+                resource.model_dump(mode="json")
+                for resource in list_bones(user.id, organism_id)
+            ],
+            "proposals": [
+                proposal.model_dump(mode="json")
+                for proposal in list_structure_proposals(user.id, organism_id)
+            ],
+            "grants": [grant.model_dump(mode="json") for grant in grants],
+            "effects": [
+                effect.model_dump(mode="json")
+                for effect in RUNTIME.stores.structural_effects.values()
+                if effect.organism_id == organism_id
+            ],
+            "execution_runs": [
+                run.model_dump(mode="json")
+                for run in RUNTIME.stores.skeletal_execution_runs.get(organism_id, [])
+            ],
+        }
+
     @app.post("/api/bones/proposals")
     async def create_structure_proposal_route(payload: CreateBoneProposalRequest, user: AuthUser = Depends(require_current_user)) -> dict[str, object]:
         proposal = create_bone_proposal(payload, user.id)
         await _persist_runtime(app)
         return {"proposal": proposal.model_dump(mode="json")}
 
-    @app.post("/api/bones/proposals/{proposal_id}/approve")
+    @app.post("/api/organisms/{organism_id}/skeleton/proposals")
+    async def create_organism_structure_proposal_route(
+        organism_id: str,
+        payload: CreateBoneProposalRequest,
+        user: AuthUser = Depends(require_current_user),
+    ) -> dict[str, object]:
+        if get_organism_detail(organism_id, user.id) is None:
+            raise HTTPException(status_code=404, detail="organism not found")
+        proposal = create_bone_proposal(payload.model_copy(update={"organism_id": organism_id}), user.id)
+        await _persist_runtime(app)
+        return {"proposal": proposal.model_dump(mode="json")}
+
+    @app.post("/api/bones/proposals/{proposal_id}/approve", status_code=202)
     async def approve_structure_proposal_route(proposal_id: str, payload: DecideProposalRequest, user: AuthUser = Depends(require_current_user)) -> dict[str, object]:
-        proposal = decide_structure_proposal(proposal_id, payload, True, user.id)
+        try:
+            proposal = decide_structure_proposal(
+                proposal_id, payload, True, user.id, defer_apply=True
+            )
+        except ValueError as exc:
+            raise HTTPException(status_code=409, detail=str(exc)) from exc
         if proposal is None:
             raise HTTPException(status_code=404, detail="proposal not found")
         await _persist_runtime(app)
         return {"proposal": proposal.model_dump(mode="json")}
+
+    @app.post("/api/organisms/{organism_id}/skeleton/reconcile")
+    async def reconcile_skeleton_route(
+        organism_id: str,
+        user: AuthUser = Depends(require_current_user),
+    ) -> dict[str, object]:
+        resources = reconcile_skeleton(organism_id, user.id)
+        if resources is None:
+            raise HTTPException(status_code=404, detail="organism not found")
+        await _persist_runtime(app)
+        return {"resources": [item.model_dump(mode="json") for item in resources]}
+
+    @app.get("/api/organisms/{organism_id}/memory/policy")
+    async def memory_policy_route(
+        organism_id: str,
+        user: AuthUser = Depends(require_current_user),
+    ) -> dict[str, object]:
+        versions = list_memory_policy_versions(organism_id, user.id)
+        if versions is None:
+            raise HTTPException(status_code=404, detail="organism not found")
+        active = next((item for item in reversed(versions) if item.status == "active"), None)
+        return {
+            "policy": active.model_dump(mode="json") if active else None,
+            "history": [item.model_dump(mode="json") for item in versions],
+        }
+
+    @app.put("/api/organisms/{organism_id}/memory/policy")
+    async def update_memory_policy_route(
+        organism_id: str,
+        payload: UpdateMemoryPolicyRequest,
+        user: AuthUser = Depends(require_current_user),
+    ) -> dict[str, object]:
+        version = update_memory_policy(organism_id, payload, user.id)
+        if version is None:
+            raise HTTPException(status_code=404, detail="organism not found")
+        await _persist_runtime(app)
+        return {"policy": version.model_dump(mode="json")}
+
+    @app.post("/api/organisms/{organism_id}/skeleton/grants/{grant_id}/revoke")
+    async def revoke_resource_grant_route(
+        organism_id: str,
+        grant_id: str,
+        user: AuthUser = Depends(require_current_user),
+    ) -> dict[str, object]:
+        grant = revoke_resource_grant(organism_id, grant_id, user.id)
+        if grant is None:
+            raise HTTPException(status_code=404, detail="resource grant not found")
+        await _persist_runtime(app)
+        return {"grant": grant.model_dump(mode="json")}
 
     @app.post("/api/bones/proposals/{proposal_id}/reject")
     async def reject_structure_proposal_route(proposal_id: str, payload: DecideProposalRequest, user: AuthUser = Depends(require_current_user)) -> dict[str, object]:
@@ -623,11 +763,25 @@ def create_app() -> FastAPI:
 
     @app.post("/api/organisms/{organism_id}/memory")
     async def create_memory_route(organism_id: str, payload: CreateMemoryRequest, user: AuthUser = Depends(require_current_user)) -> dict[str, object]:
-        record = create_memory(organism_id, payload, user.id)
+        try:
+            record = create_memory(organism_id, payload, user.id)
+        except ValueError as exc:
+            raise HTTPException(status_code=409, detail=str(exc)) from exc
         if record is None:
             raise HTTPException(status_code=404, detail="organism not found")
         await _persist_runtime(app)
         return {"memory_record": record.model_dump(mode="json")}
+
+    @app.post("/api/organisms/{organism_id}/memory/maintenance")
+    async def memory_maintenance_route(
+        organism_id: str,
+        user: AuthUser = Depends(require_current_user),
+    ) -> dict[str, object]:
+        result = maintain_memory(organism_id, user.id)
+        if result is None:
+            raise HTTPException(status_code=404, detail="organism not found")
+        await _persist_runtime(app)
+        return {"result": result}
 
     @app.get("/api/organisms/{organism_id}/memory/{memory_id}")
     async def get_memory_route(organism_id: str, memory_id: str, user: AuthUser = Depends(require_current_user)) -> dict[str, object]:
@@ -650,11 +804,47 @@ def create_app() -> FastAPI:
         payload: SubmitSignalRequest,
         user: AuthUser = Depends(require_current_user),
     ) -> dict[str, object]:
-        response = submit_signal(organism_id, payload, user.id, Actor(actor_id=user.id, roles=["operator"]))
+        execution_service = getattr(app.state, "execution_service", None)
+        if execution_service is None:  # pragma: no cover - defensive app embedding guard
+            raise HTTPException(status_code=503, detail="execution service unavailable")
+        try:
+            response = await execution_service.run(
+                organism_id,
+                submit_signal,
+                organism_id,
+                payload,
+                user.id,
+                Actor(actor_id=user.id, roles=["operator"]),
+                timeout_seconds=(payload.deadline_ms / 1000) if payload.deadline_ms else None,
+            )
+        except RuntimeFailure as exc:
+            status_code = 504 if exc.failure_type == FailureType.TIMEOUT else 503
+            raise HTTPException(status_code=status_code, detail=str(exc)) from exc
         if response is None:
             raise HTTPException(status_code=404, detail="organism not found")
         await _persist_runtime(app)
         return response.model_dump(mode="json")
+
+    @app.get("/api/organisms/{organism_id}/cell-runs")
+    async def cell_execution_runs_route(
+        organism_id: str,
+        user: AuthUser = Depends(require_current_user),
+    ) -> dict[str, object]:
+        runs = list_cell_execution_runs(organism_id, user.id)
+        if runs is None:
+            raise HTTPException(status_code=404, detail="organism not found")
+        return {"cell_runs": [run.model_dump(mode="json") for run in runs]}
+
+    @app.get("/api/organisms/{organism_id}/cell-runs/{run_id}")
+    async def cell_execution_run_route(
+        organism_id: str,
+        run_id: str,
+        user: AuthUser = Depends(require_current_user),
+    ) -> dict[str, object]:
+        run = get_cell_execution_run(organism_id, run_id, user.id)
+        if run is None:
+            raise HTTPException(status_code=404, detail="cell run not found")
+        return {"cell_run": run.model_dump(mode="json")}
 
     @app.get("/api/organisms/{organism_id}/events")
     async def organism_events_route(

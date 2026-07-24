@@ -28,7 +28,10 @@ export function OrganismsProvider({ children }: { children: React.ReactNode }) {
   }, []);
 
   useEffect(() => {
-    refresh().finally(() => setLoading(false));
+    const timeout = window.setTimeout(() => {
+      void refresh().finally(() => setLoading(false));
+    }, 0);
+    return () => window.clearTimeout(timeout);
   }, [refresh]);
 
   return (

@@ -18,7 +18,7 @@ interface Stage {
 
 function buildStages(response: SubmitSignalResponse): Stage[] {
   const stages: Stage[] = [];
-  const { signal, membrane_decision, cell, protein, events, structure_request } = response;
+  const { signal, membrane_decision, cell, protein, execution_run, events, structure_request } = response;
 
   stages.push({
     key: "signal",
@@ -89,6 +89,33 @@ function buildStages(response: SubmitSignalResponse): Stage[] {
       colorClass: "text-violet-300",
       borderClass: "border-violet-400/30",
       bgClass: "bg-violet-400/5",
+    });
+  }
+
+  if (execution_run) {
+    const completed = execution_run.step_results.filter((step) => step.status === "completed").length;
+    const failed = execution_run.step_results.filter(
+      (step) => step.status === "failed" || step.status === "resource_exhausted",
+    ).length;
+    stages.push({
+      key: "cell-execution",
+      label: "Cell Execution",
+      role: "Multi-Protein Plan",
+      status: execution_run.status === "completed" ? "pass" : "fail",
+      outcome: `${completed}/${execution_run.step_results.length} completed`,
+      details: [
+        ["plan", execution_run.plan_id],
+        ["final step", execution_run.final_step_id],
+        ["failed", String(failed)],
+        [
+          "iterations",
+          String(execution_run.step_results.reduce((total, step) => total + step.iterations, 0)),
+        ],
+      ],
+      raw: { steps: execution_run.step_results },
+      colorClass: "text-teal-300",
+      borderClass: "border-teal-400/30",
+      bgClass: "bg-teal-400/5",
     });
   }
 

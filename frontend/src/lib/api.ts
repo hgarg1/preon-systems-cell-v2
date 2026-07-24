@@ -70,11 +70,30 @@ export interface CellRecord {
   last_active_at: string | null;
 }
 
+export interface ExecutionStep {
+  step_id: string;
+  module_id: string;
+  depends_on: string[];
+  condition: string | null;
+  input_map: Record<string, unknown>;
+  max_iterations: number;
+  iterate_while: string | null;
+}
+
+export interface CellExecutionPlan {
+  plan_id: string;
+  steps: ExecutionStep[];
+  final_step_id: string | null;
+  fail_fast: boolean;
+  max_parallelism: number;
+}
+
 export interface GenomeModule {
   module_id: string;
   signal_types: string[];
-  execution_strategy: "precomputed" | "deterministic_tool" | "llm_stub";
+  execution_strategy: "precomputed" | "deterministic_tool" | "llm_stub" | "llm";
   deterministic_tool: string | null;
+  execution_plan: CellExecutionPlan | null;
 }
 
 export interface DivisionLoadGate {
@@ -136,12 +155,25 @@ export interface Genome {
   division_policy: DivisionPolicy | null;
 }
 
+export type DataClass = "public" | "internal" | "confidential" | "restricted";
+
+export interface TraceContext {
+  request_id: string;
+  organism_id: string;
+  cell_run_id: string | null;
+  step_id: string | null;
+  protein_id: string | null;
+  provider_call_id: string | null;
+}
+
 export interface Signal {
   signal_id: string;
   organism_id: string;
   type: string;
   payload: Record<string, unknown>;
   priority: number;
+  data_class: DataClass;
+  trace_context: TraceContext | null;
   created_at: string;
 }
 
@@ -159,6 +191,8 @@ export interface Protein {
   payload: Record<string, unknown>;
   confidence: number;
   status: ProteinStatus;
+  data_class: DataClass;
+  trace_context: TraceContext | null;
   validation_report: {
     valid: boolean;
     errors: string[];
@@ -166,6 +200,37 @@ export interface Protein {
     misfolding_types: MisfoldingType[];
   };
   created_at: string;
+}
+
+export interface ExecutionStepResult {
+  step_id: string;
+  module_id: string;
+  status: "pending" | "running" | "completed" | "skipped" | "failed" | "resource_exhausted" | "cancelled" | "timed_out";
+  protein: Protein | null;
+  iterations: number;
+  input_payload: Record<string, unknown>;
+  error: string | null;
+  iteration_limit_reached: boolean;
+  trace_context: TraceContext | null;
+  failure_type: string | null;
+}
+
+export interface CellExecutionRun {
+  run_id: string;
+  plan_id: string;
+  organism_id: string;
+  cell_id: string;
+  signal_id: string;
+  owner_user_id: string | null;
+  status: "completed" | "failed" | "partial" | "degraded" | "cancelled" | "timed_out";
+  step_results: ExecutionStepResult[];
+  final_step_id: string;
+  final_protein_id: string | null;
+  shared_state: Record<string, unknown>;
+  data_class: DataClass;
+  trace_context: TraceContext | null;
+  created_at: string;
+  completed_at: string;
 }
 
 export interface RuntimeEvent {
@@ -177,6 +242,8 @@ export interface RuntimeEvent {
   contract_id: string | null;
   type: string;
   message: string;
+  data_class: DataClass;
+  trace_context: TraceContext | null;
   values: Record<string, unknown>;
   created_at: string;
 }
@@ -216,12 +283,28 @@ export interface StructureRequest {
 export interface MemoryRecord {
   memory_id: string;
   organism_id: string;
+  owner_user_id: string | null;
   scope: string;
   kind: string;
+  memory_type: "episodic" | "semantic" | "procedural";
   payload: Record<string, unknown>;
   source_signal_id: string | null;
+  source_run_id: string | null;
+  source_protein_ids: string[];
   confidence: number;
-  status: "active" | "deprecated" | "pending" | "approved" | "rejected";
+  importance: number;
+  data_class: "public" | "internal" | "confidential" | "restricted";
+  admission_status: "admitted" | "rejected";
+  promotion_reason: string;
+  content_hash: string;
+  ttl_seconds: number | null;
+  last_accessed_at: string | null;
+  access_count: number;
+  supersedes_memory_id: string | null;
+  superseded_by_memory_id: string | null;
+  storage_resource_id: string | null;
+  admission_policy_version_id: string | null;
+  status: "active" | "deprecated" | "expired" | "superseded" | "pending" | "approved" | "rejected";
   version: number;
   created_at: string;
   updated_at: string;
@@ -295,6 +378,7 @@ export interface SubmitSignalResponse {
   membrane_decision: MembraneDecision;
   cell: CellRecord | null;
   protein: Protein | null;
+  execution_run: CellExecutionRun | null;
   events: RuntimeEvent[];
   structure_request: StructureRequest | null;
 }
@@ -420,11 +504,95 @@ export async function hibernateOrganism(organismId: string): Promise<OrganismRec
   return payload.organism;
 }
 
-export async function submitSignal(organismId: string, input: { type: string; payload: Record<string, unknown>; priority?: number }): Promise<SubmitSignalResponse> {
+export async function submitSignal(organismId: string, input: { type: string; payload: Record<string, unknown>; priority?: number; dataClass?: DataClass; deadlineMs?: number }): Promise<SubmitSignalResponse> {
   return apiFetch<SubmitSignalResponse>(`/api/organisms/${encodeURIComponent(organismId)}/signals`, {
     method: "POST",
-    body: JSON.stringify({ type: input.type, payload: input.payload, priority: input.priority ?? 5 }),
+    body: JSON.stringify({
+      type: input.type,
+      payload: input.payload,
+      priority: input.priority ?? 5,
+      data_class: input.dataClass ?? "internal",
+      deadline_ms: input.deadlineMs,
+    }),
   });
+}
+
+export interface StructuralResource {
+  bone_id: string;
+  organism_id: string | null;
+  name: string;
+  structure_type: string;
+  provider: string;
+  provider_resource_ref: string | null;
+  definition: Record<string, unknown>;
+  observed_state: Record<string, unknown>;
+  generation: number;
+  health: "unknown" | "healthy" | "degraded" | "unavailable";
+  created_by_cell_id: string | null;
+  status: string;
+  updated_at: string;
+}
+
+export interface StructureProposal {
+  proposal_id: string;
+  organism_id: string | null;
+  proposed_by_cell_id: string | null;
+  name: string;
+  structure_type: string;
+  operation: "grow" | "remodel" | "retire";
+  provider: string;
+  plan_digest: string | null;
+  status: "pending" | "approved" | "rejected";
+  apply_status: "pending" | "queued" | "processing" | "applied" | "failed" | "not_applicable";
+  resulting_bone_id: string | null;
+  source_run_id: string | null;
+  source_protein_ids: string[];
+  decision_reason: string | null;
+}
+
+export interface ResourceGrant {
+  grant_id: string;
+  resource_id: string;
+  cell_id: string;
+  permissions: string[];
+  namespace: string | null;
+  provider: string;
+  credential_ref: string | null;
+  status: "active" | "revoked";
+}
+
+export interface StructuralEffect {
+  effect_id: string;
+  proposal_id: string;
+  status: "pending" | "processing" | "succeeded" | "failed";
+  attempt_count: number;
+  max_attempts: number;
+  last_error: string | null;
+  source_run_id: string | null;
+  updated_at: string;
+}
+
+export interface SkeletonDetail {
+  cells: CellRecord[];
+  resources: StructuralResource[];
+  proposals: StructureProposal[];
+  grants: ResourceGrant[];
+  effects: StructuralEffect[];
+  execution_runs: CellExecutionRun[];
+}
+
+export async function listCellRuns(organismId: string): Promise<CellExecutionRun[]> {
+  const payload = await apiFetch<{ cell_runs: CellExecutionRun[] }>(
+    `/api/organisms/${encodeURIComponent(organismId)}/cell-runs`,
+  );
+  return payload.cell_runs;
+}
+
+export async function getCellRun(organismId: string, runId: string): Promise<CellExecutionRun> {
+  const payload = await apiFetch<{ cell_run: CellExecutionRun }>(
+    `/api/organisms/${encodeURIComponent(organismId)}/cell-runs/${encodeURIComponent(runId)}`,
+  );
+  return payload.cell_run;
 }
 
 export async function listContracts(signal?: AbortSignal): Promise<Contract[]> {
@@ -572,12 +740,99 @@ export async function approveBoneProposal(proposalId: string): Promise<Record<st
   return payload.proposal;
 }
 
-export async function createMemory(organismId: string, input: { scope: string; kind: string; payload: Record<string, unknown> }): Promise<MemoryRecord> {
+export async function createMemory(organismId: string, input: {
+  scope: string;
+  kind: string;
+  memory_type?: "episodic" | "semantic" | "procedural";
+  payload: Record<string, unknown>;
+  confidence?: number;
+  importance?: number;
+  ttl_seconds?: number;
+  supersedes_memory_id?: string;
+}): Promise<MemoryRecord> {
   const payload = await apiFetch<{ memory_record: MemoryRecord }>(`/api/organisms/${encodeURIComponent(organismId)}/memory`, {
     method: "POST",
     body: JSON.stringify(input),
   });
   return payload.memory_record;
+}
+
+export async function getSkeleton(organismId: string): Promise<SkeletonDetail> {
+  return apiFetch<SkeletonDetail>(
+    `/api/organisms/${encodeURIComponent(organismId)}/skeleton`,
+  );
+}
+
+export async function approveStructureProposal(
+  proposalId: string,
+  planDigest: string | null,
+): Promise<StructureProposal> {
+  const payload = await apiFetch<{ proposal: StructureProposal }>(
+    `/api/bones/proposals/${encodeURIComponent(proposalId)}/approve`,
+    {
+      method: "POST",
+      body: JSON.stringify({
+        reason: "Approved from skeletal inspector",
+        plan_digest: planDigest,
+      }),
+    },
+  );
+  return payload.proposal;
+}
+
+export async function rejectStructureProposal(proposalId: string): Promise<StructureProposal> {
+  const payload = await apiFetch<{ proposal: StructureProposal }>(
+    `/api/bones/proposals/${encodeURIComponent(proposalId)}/reject`,
+    {
+      method: "POST",
+      body: JSON.stringify({ reason: "Rejected from skeletal inspector" }),
+    },
+  );
+  return payload.proposal;
+}
+
+export async function reconcileSkeleton(organismId: string): Promise<StructuralResource[]> {
+  const payload = await apiFetch<{ resources: StructuralResource[] }>(
+    `/api/organisms/${encodeURIComponent(organismId)}/skeleton/reconcile`,
+    { method: "POST" },
+  );
+  return payload.resources;
+}
+
+export async function revokeSkeletonGrant(
+  organismId: string,
+  grantId: string,
+): Promise<ResourceGrant> {
+  const payload = await apiFetch<{ grant: ResourceGrant }>(
+    `/api/organisms/${encodeURIComponent(organismId)}/skeleton/grants/${encodeURIComponent(grantId)}/revoke`,
+    { method: "POST" },
+  );
+  return payload.grant;
+}
+
+export async function deprecateMemory(organismId: string, memoryId: string): Promise<MemoryRecord> {
+  const payload = await apiFetch<{ memory_record: MemoryRecord }>(
+    `/api/organisms/${encodeURIComponent(organismId)}/memory/${encodeURIComponent(memoryId)}/deprecate`,
+    { method: "POST" },
+  );
+  return payload.memory_record;
+}
+
+export async function maintainMemory(organismId: string): Promise<{
+  expired: number;
+  consolidated: number;
+  deprecated: number;
+  deleted: number;
+}> {
+  const payload = await apiFetch<{ result: {
+    expired: number;
+    consolidated: number;
+    deprecated: number;
+    deleted: number;
+  } }>(`/api/organisms/${encodeURIComponent(organismId)}/memory/maintenance`, {
+    method: "POST",
+  });
+  return payload.result;
 }
 
 export async function createCapability(input: { name: string; description?: string; schema?: Record<string, unknown> }): Promise<Capability> {

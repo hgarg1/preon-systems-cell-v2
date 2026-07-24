@@ -5,7 +5,14 @@ import pytest
 
 from preon_systems_cell.api import RUNTIME
 from preon_systems_cell.engine import Cytoplasm, Membrane, Mitochondria, RuntimeStores, Skeleton
-from preon_systems_cell.models import Genome
+from preon_systems_cell.models import (
+    CellExecutionPlan,
+    ExecutionStep,
+    ExecutionStrategy,
+    Genome,
+    GenomeModule,
+    PolicySet,
+)
 from preon_systems_cell.rate_limit import auth_rate_limiter
 from preon_systems_cell.web import app
 
@@ -76,6 +83,57 @@ def test_full_organism_api_flow():
     assert signal.json()["signal"]["actor"]["actor_id"] == client.get("/auth/me").json()["user"]["id"]
     assert detail.json()["proteins"]
     assert hibernate.json()["organism"]["lifecycle_state"] == "hibernated"
+
+
+def test_phase4_execution_run_serializes_through_async_web_route():
+    created = client.post("/api/organisms", json={})
+    organism_id = created.json()["organism"]["organism_id"]
+    genome_id = "genome-web-phase4"
+    organism = RUNTIME.stores.organisms[organism_id].model_copy(
+        update={
+            "genome_id": genome_id,
+            "policies": PolicySet(allowed_signal_types=["workflow"]),
+        }
+    )
+    RUNTIME.stores.organisms[organism_id] = organism
+    RUNTIME.stores.genomes[genome_id] = Genome(
+        genome_id=genome_id,
+        modules=[
+            GenomeModule(
+                module_id="trigger",
+                signal_types=["workflow"],
+                execution_plan=CellExecutionPlan(
+                    plan_id="web-phase4",
+                    steps=[ExecutionStep(step_id="work", module_id="work")],
+                ),
+            ),
+            GenomeModule(
+                module_id="work",
+                signal_types=["work"],
+                execution_strategy=ExecutionStrategy.PRECOMPUTED,
+            ),
+        ],
+    )
+
+    response = client.post(
+        f"/api/organisms/{organism_id}/signals",
+        json={"type": "workflow", "payload": {"message": "ping"}},
+    )
+
+    assert response.status_code == 200
+    body = response.json()
+    run_id = body["execution_run"]["run_id"]
+    runs = client.get(f"/api/organisms/{organism_id}/cell-runs")
+    run_detail = client.get(f"/api/organisms/{organism_id}/cell-runs/{run_id}")
+    assert body["protein"]["payload"]["result"] == "pong"
+    assert body["execution_run"]["plan_id"] == "web-phase4"
+    assert body["execution_run"]["status"] == "completed"
+    assert body["execution_run"]["final_protein_id"] == body["protein"]["protein_id"]
+    assert body["execution_run"]["trace_context"]["cell_run_id"] == run_id
+    assert runs.status_code == 200
+    assert runs.json()["cell_runs"][0]["run_id"] == run_id
+    assert run_detail.status_code == 200
+    assert run_detail.json()["cell_run"]["step_results"][0]["trace_context"]["step_id"] == "work"
 
 
 def test_contract_flow_and_auth_boundary():
@@ -265,6 +323,7 @@ def test_v3_food_oxygen_health_soul_and_bone_routes():
     health = client.get(f"/api/organisms/{organism_id}/health")
     proposal = client.post("/api/bones/proposals", json={"name": "DurableAdapterSchema", "structure_type": "schema", "definition": {"input": "object"}})
     approved = client.post(f"/api/bones/proposals/{proposal.json()['proposal']['proposal_id']}/approve", json={"reason": "fits v3 bone layer"})
+    RUNTIME.process_pending_structural_effects()
     bones = client.get("/api/bones")
     soul = client.post(f"/api/organisms/{organism_id}/die")
     reincarnated = client.post(f"/api/souls/{soul.json()['soul']['soul_id']}/reincarnate")
@@ -276,3 +335,95 @@ def test_v3_food_oxygen_health_soul_and_bone_routes():
     assert bones.json()["bones"][0]["name"] == "DurableAdapterSchema"
     assert soul.json()["soul"]["snapshot"]["organism"]["organism_id"] == organism_id
     assert reincarnated.json()["organism"]["growth_state"]["reincarnated_from_soul_id"] == soul.json()["soul"]["soul_id"]
+
+
+def test_phase5a_organism_skeleton_growth_and_grant_api():
+    organism = client.post("/api/organisms", json={}).json()["organism"]
+    organism_id = organism["organism_id"]
+    detail = client.get(f"/api/organisms/{organism_id}").json()
+    worker = next(cell for cell in detail["cells"] if cell["cell_type"] == "worker")
+
+    created = client.post(
+        f"/api/organisms/{organism_id}/skeleton/proposals",
+        json={
+            "name": "organism-memory",
+            "structure_type": "database_schema",
+            "provider": "postgres",
+            "definition": {"schema": "organism_memory", "namespace": organism_id},
+            "target_cell_id": worker["cell_id"],
+            "requested_permissions": ["read", "write"],
+            "idempotency_key": f"{organism_id}:memory:v1",
+        },
+    )
+    proposal = created.json()["proposal"]
+    approved = client.post(
+        f"/api/bones/proposals/{proposal['proposal_id']}/approve",
+        json={"reason": "approved Phase 5A growth", "plan_digest": proposal["plan_digest"]},
+    )
+    RUNTIME.process_pending_structural_effects()
+    skeleton = client.get(f"/api/organisms/{organism_id}/skeleton")
+
+    assert created.status_code == 200
+    assert approved.status_code == 202
+    assert approved.json()["proposal"]["apply_status"] == "queued"
+    assert {cell["cell_type"] for cell in skeleton.json()["cells"]} == {
+        "osteoblast",
+        "osteoclast",
+        "osteocyte",
+    }
+    assert skeleton.json()["resources"][0]["provider"] == "postgres"
+    grant = skeleton.json()["grants"][0]
+    assert grant["cell_id"] == worker["cell_id"]
+    assert grant["credential_ref"] is None
+
+    revoked = client.post(
+        f"/api/organisms/{organism_id}/skeleton/grants/{grant['grant_id']}/revoke"
+    )
+    assert revoked.status_code == 200
+    assert revoked.json()["grant"]["status"] == "revoked"
+
+
+def test_phase5b_memory_admission_supersession_and_owner_isolation():
+    organism = client.post("/api/organisms", json={}).json()["organism"]
+    organism_id = organism["organism_id"]
+    first = client.post(
+        f"/api/organisms/{organism_id}/memory",
+        json={
+            "kind": "retention_policy",
+            "memory_type": "procedural",
+            "payload": {"days": 7},
+            "confidence": 0.95,
+            "importance": 0.9,
+        },
+    )
+    first_memory = first.json()["memory_record"]
+    replacement = client.post(
+        f"/api/organisms/{organism_id}/memory",
+        json={
+            "kind": "retention_policy",
+            "memory_type": "procedural",
+            "payload": {"days": 30},
+            "confidence": 0.95,
+            "importance": 0.9,
+            "supersedes_memory_id": first_memory["memory_id"],
+        },
+    )
+    listed = client.get(f"/api/organisms/{organism_id}/memory")
+    maintenance = client.post(f"/api/organisms/{organism_id}/memory/maintenance")
+    skeleton = client.get(f"/api/organisms/{organism_id}/skeleton")
+
+    assert first.status_code == 200
+    assert replacement.status_code == 200
+    assert replacement.json()["memory_record"]["version"] == 2
+    records = {item["memory_id"]: item for item in listed.json()["memory_records"]}
+    assert records[first_memory["memory_id"]]["status"] == "superseded"
+    assert records[first_memory["memory_id"]]["superseded_by_memory_id"] == replacement.json()["memory_record"]["memory_id"]
+    assert maintenance.status_code == 200
+    assert maintenance.json()["result"]["deleted"] == 0
+    assert any(item["name"] == "organism-memory" for item in skeleton.json()["resources"])
+    assert skeleton.json()["grants"]
+
+    other = TestClient(app)
+    _auth_login("secondary@example.com", PASSWORD, other)
+    denied = other.get(f"/api/organisms/{organism_id}/memory")
+    assert denied.status_code == 404

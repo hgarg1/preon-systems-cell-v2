@@ -21,7 +21,10 @@ export function OrganismDetailProvider({ id, children }: { id: string; children:
   }, [id]);
 
   useEffect(() => {
-    refresh().finally(() => setLoading(false));
+    const timeout = window.setTimeout(() => {
+      void refresh().finally(() => setLoading(false));
+    }, 0);
+    return () => window.clearTimeout(timeout);
   }, [refresh]);
 
   return (

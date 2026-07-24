@@ -460,6 +460,8 @@ Acceptance criteria:
 
 V3 expands the skeletal layer into a growth system for structural access, while preserving no direct destructive infra mutation in core runtime.
 
+Phase 5A refines this feature by making osteoblast, osteoclast, and osteocyte first-class organism-owned cells. Structural resources use desired/observed state and scoped access grants; the skeletal layer governs resource lifecycle but does not proxy ordinary data-plane access. See `skeletal-growth.md` and ADR-014/ADR-015.
+
 Backend tasks:
 - Add `BoneStructureRecord` for:
   - DB schemas

@@ -1,7 +1,7 @@
 # Implementation Roadmap — LLM Proteins Architecture
 
-Honest effort, cadence, and source mapping for building out the full architecture.  
-Based on gap analysis against current codebase (~20-25% complete) and the LLM Proteins spec.
+Evidence-based sequencing, maturity gates, and source mapping for building out the full architecture.
+Updated after Phase 4.5 implementation against the current Python/FastAPI/PostgreSQL/Next.js codebase and the LLM Proteins spec.
 
 ---
 
@@ -19,32 +19,88 @@ Based on gap analysis against current codebase (~20-25% complete) and the LLM Pr
 | Frontend: organisms, cells, genome, events, memory, console | ✅ Working |
 | Basic protein validation pipeline (`ProteinPipeline`) | ✅ Working |
 | Memory records (organism-level only) | ✅ Working |
-| `LlmProtein` — active executor model, single-use enforced | ✅ Just built |
-| `AnswerProtein` — frozen transport payload with routing hint | ✅ Just built |
-| `Proteasome` — deconstructs LlmProtein → deposits into CellWorkingState | ✅ Just built |
-| `CellWorkingState` — async-safe named-slot cell working memory | ✅ Just built |
-| `GolgiApparatus` — pluggable validator / repair / destroy pipeline | ✅ Just built |
-| `Lysosome` — destroys misfolded proteins, rolls back slots, retry signal | ✅ Just built |
-| `Cytoskeleton` — routes AnswerProtein to cytoplasm slot / cell / membrane | ✅ Just built |
+| `LlmProtein` — active executor model, single-use enforced | ✅ Functional |
+| `AnswerProtein` — frozen transport payload with routing hint | ✅ Functional |
+| `Proteasome` — deconstructs LlmProtein → deposits into CellWorkingState | ✅ Functional |
+| `CellWorkingState` — async-safe named-slot cell working memory | ✅ Functional |
+| `GolgiApparatus` — pluggable validator / repair / destroy pipeline | ✅ Functional |
+| `Lysosome` — destroys misfolded proteins, rolls back slots, retry signal | ✅ Functional |
+| `Cytoskeleton` — routes AnswerProtein to cytoplasm slot / cell / membrane | ✅ Functional |
+| Phase 1 — Bone contracts, enzyme compiler, `BoneCortex`, capability graph | ✅ Functional + integrated |
+| Phase 2 — `CellModelRouter`, provider registry, fallback chains, telemetry | ✅ Functional + integrated |
+| `ProteinType` enum + per-type prompt templates (`Ribosome._build_prompt`) | ✅ Functional |
+| Per-type validation in `ProteinPipeline.validate()` | ✅ Functional |
+| `knowledge.reference.lookup` bone + default Retrieval module for `search` | ✅ Functional + integrated |
+| Phase 4 — genome-declared cell execution plans, shared state, parallel/conditional/iterative coordination | ✅ Functional + integrated |
+| Phase 4 organelle integration — Proteasome, Golgi, Lysosome, Cytoskeleton in the live plan path | ✅ Functional + integrated |
+| Phase 4.5 — structured output, shared execution, tracing, durable runs, data policy, resilience | ✅ Functional + integrated |
+| Phase 5.5 — modular runtime, skeletal effect outbox, versioned memory policy, inspector | ✅ Functional + integrated |
 
-**What is NOT here yet:** wiring organelles into `submit_signal` flow, multi-protein cell coordination, tissue/organ execution, aggregation, consensus, DAG scheduling, layered memory, distributed tracing, resilience modes, most bones.
+**What is NOT here yet:** tissue/organ memory activation, semantic/vector retrieval, live cloud resource provisioning, tissue/organ execution, cross-cell aggregation, consensus, organism-level task decomposition, distributed concurrency limits across multiple application replicas, hierarchical checkpoints/recovery modes, and strict database-enforced multi-tenancy.
 
-> **Note on Phase 4:** `CellWorkingState` is the "Shared state buffer" / `CellRunContext` described in Phase 4. The slot names `shared_state_buffer`, `result_registry`, and `execution_context` are already the canonical keys. Phase 4 still needs to wire these into the execution plan DAG.
+> **Next phase:** Phase 6A, Tissue Runtime MVP. Phase 5.5 remains only partially
+> production-hardened until its opt-in live-provider suites run in the target environment.
 
 ---
 
-## Effort Key
+## Maturity Model
 
-| Size | Time (solo) | Time (2-dev) | Character |
+“Shipped” is too coarse for this architecture. Every phase is tracked at three distinct levels:
+
+| Level | Meaning |
+|---|---|
+| **Functional** | Core behavior exists and has focused automated tests |
+| **Integrated** | Behavior is connected to the live runtime/API and relevant operator surface, with regression coverage |
+| **Production-hardened** | Live-provider contracts, durable storage, traceability, concurrency/failure behavior, security boundaries, and load/failure tests meet the phase exit gate |
+
+Current maturity:
+
+| Phase | Functional | Integrated | Production-hardened |
+|---|---:|---:|---:|
+| P1 — Bones | ✅ | ✅ | ⏳ |
+| P2 — Model routing | ✅ | ✅ | ⏳ |
+| P3 — Protein types | ✅ | ✅ | Partial |
+| P4 — Intra-cell coordination | ✅ | ✅ | ⏳ |
+| P4.5 — Runtime hardening | ✅ | ✅ | Partial |
+| P5A — Living skeleton | ✅ | ✅ | Partial |
+| P5B — Durable organism memory | ✅ | ✅ | Partial |
+| P5.5 — Runtime boundary hardening | ✅ | ✅ | Partial |
+
+Phase 4.5 closes the P3/P4 integration gaps with provider-native schemas plus canonical normalization, shared bounded execution, trace propagation, typed resilience, owner-scoped run APIs, and PostgreSQL run/step records. Production hardening remains partial until deployment-specific provider credentials, a real PostgreSQL instance, multi-replica limits, and sustained load/failure tests pass in the target environment.
+
+---
+
+## Effort and Forecasting
+
+Estimates are planning ranges, not delivery promises. A phase exits only when its acceptance gate passes; elapsed time does not make incomplete work “shipped.”
+
+| Size | Indicative solo range | Indicative 2-dev range | Character |
 |---|---|---|---|
-| **S** | 3–5 days | 2–3 days | Isolated, clear spec |
-| **M** | 1–2 weeks | 4–7 days | Some design decisions, moderate coupling |
-| **L** | 3–4 weeks | 2 weeks | Architectural impact, multiple files |
-| **XL** | 6–10 weeks | 3–5 weeks | Fundamental system design, high coupling |
+| **S** | 3–7 working days | 2–4 working days | Isolated, clear contract, minimal persistence impact |
+| **M** | 2–4 weeks | 1–3 weeks | Moderate coupling, migrations or API work |
+| **L** | 4–8 weeks | 3–6 weeks | Cross-layer behavior, failure testing, operator impact |
+| **XL** | 8–16+ weeks | 5–10+ weeks | Fundamental runtime design, distributed state, or major operational risk |
 
 ---
 
-## Phase 1 — Skeletal Capability Framework
+## Universal Phase Exit Checklist
+
+Every phase-specific gate extends this checklist:
+
+- Domain model and invariants are explicit and versioned.
+- Public API/event contracts and backward-compatibility behavior are documented.
+- PostgreSQL migration and in-memory/PostgreSQL parity tests exist for durable state.
+- Unit, integration, API, restart/reload, negative authorization, and regression tests pass as applicable.
+- Deadline, cancellation, retry, idempotency, partial-result, and external-side-effect semantics are defined.
+- Trace, metrics, provenance, classification, redaction, and ownership propagate through new boundaries.
+- Fan-out/queue/loop/payload limits are explicit and saturation/failure tests pass.
+- Minimal operator inspectability exists for the new runtime state.
+- Python package build, full backend suite, TypeScript, touched-file lint, and frontend production build pass.
+- Known limitations and deferred hardening are recorded; they cannot be hidden behind a “shipped” label.
+
+---
+
+## Phase 1 — Skeletal Capability Framework ✅ FUNCTIONAL + INTEGRATED
 **Sources:** `bones-and-llm-routing.md` + §4 (Protein Types)  
 **Effort:** M  
 **Dependency:** None — fully isolated, can start immediately
@@ -184,9 +240,9 @@ elif module.execution_strategy == ExecutionStrategy.DETERMINISTIC_TOOL:
 
 ---
 
-### Layer 4 — Bone Cell Lifecycle
+### Layer 4 — Capability-Skeleton Maintenance Hooks
 
-Three bone cell roles, each with a concrete responsibility:
+Phase 1 introduced three lightweight maintenance roles for the capability registry. These hooks are historical precursors, not organism-owned infrastructure cells. Phase 5A makes the biological roles first-class `CellRecord` instances for structural growth while retaining these hooks for capability telemetry and binding maintenance.
 
 **Osteoblast** (already partially exists) — creates new bone contracts and enzyme bindings:
 - Proposes `BoneContract` definitions through the existing proposal API
@@ -204,7 +260,7 @@ Three bone cell roles, each with a concrete responsibility:
 - Removes enzyme bindings that have been superseded
 - Simplifies the capability graph when derivation paths collapse
 
-Osteocyte and Osteoclast are lightweight at this phase — stubbed monitoring hooks that emit events, with full logic deferred to Phase 12 (Observability).
+Osteocyte and Osteoclast are lightweight capability-registry helpers at this phase. Phase 5A supplies the first-class skeletal cells and structural resource lifecycle. Their events join the Phase 4.5 trace/telemetry foundation; advanced skeletal health analytics can mature with Phase 12 operations.
 
 ---
 
@@ -212,11 +268,11 @@ Osteocyte and Osteoclast are lightweight at this phase — stubbed monitoring ho
 
 When a cell repeatedly assembles enzymes dynamically to satisfy a bone contract and succeeds at high rate, the Osteoblast can promote that assembly to a permanent default enzyme binding — the equivalent of stress-induced bone mineralization. The organism gradually earns stronger skeletal structure through use, not through upfront design.
 
-This is intentionally deferred. Phase 1 establishes the substrate for it. Crystallization becomes meaningful once Phase 4 (intra-cell coordination) and Phase 12 (observability) are in place.
+This is intentionally deferred. Phase 1 establishes the substrate for it. Crystallization becomes meaningful only after Phase 4 coordination, Phase 4.5 trustworthy telemetry, and enough reviewed usage history exist.
 
 ---
 
-### Default bone contracts & enzyme bindings shipped in Phase 1
+### Default bone contracts & enzyme bindings implemented in Phase 1
 
 These are defined as data (YAML gene definitions), not Python tools:
 
@@ -262,7 +318,7 @@ Changes to existing files:
 
 ---
 
-### Cadence
+### Original implementation cadence (historical)
 
 - Week 1: `BoneContract` model, `EnzymeGene` model, `EnzymeCompiler` (all three kinds + safe AST), `BoneCortex`, `defaults.yaml` with 8 expression/composition enzymes, wire Ribosome
 - Week 2: 4 `python_ref` data modules (periodic table, country codes, HTTP status, morse), remaining 8 default bones, Osteocyte telemetry stub, Osteoclast stub, integration tests
@@ -271,7 +327,7 @@ Changes to existing files:
 
 ---
 
-## Phase 2 — Model Interface Layer & Provider Routing
+## Phase 2 — Model Interface Layer & Provider Routing ✅ FUNCTIONAL + INTEGRATED
 **Sources:** §5 (Model Interface Layer) + LLM Protein Model Routing Architecture  
 **Effort:** M  
 **Dependency:** Phase 0 (LLM adapters exist)
@@ -287,7 +343,7 @@ Model routing determines which provider/model gives that protein its execution s
 
 The Ribosome does not choose the model. It creates an `LlmProteinInstantiationRequest` and delegates to the routing layer. The protein is born with a provider/model identity already resolved.
 
-At Phase 2, routing is **deterministic policy resolution** — no weighted scoring, no historical telemetry (none exists yet). The weighted scoring formula is deferred to Phase 12 once execution telemetry accumulates and weights can be validated.
+At Phase 2, routing is **deterministic policy resolution**. Preliminary telemetry exists, but it is not yet trustworthy enough for weighted scoring because normalization and final validation outcomes are not connected. Phase 4.5 fixes that telemetry contract; Phase 10 may add weighted routing only after sufficient reviewed history exists.
 
 ---
 
@@ -299,7 +355,7 @@ At Phase 2, routing is **deterministic policy resolution** — no weighted scori
 @dataclass(frozen=True)
 class LlmProteinInstantiationRequest:
     signal_id: str
-    task_id: str           # signal_id until Phase 8 TaskGraph exists
+    task_id: str           # signal_id until Phase 8A TaskGraph exists
     module_id: str
 
     protein_type: ProteinType          # from GenomeModule
@@ -370,7 +426,7 @@ class ProviderModelProfile:
 
 A `MODEL_REGISTRY: list[ProviderModelProfile]` ships with default entries for Anthropic, OpenAI, Grok, Gemini. Exact model IDs remain configurable via environment.
 
-**`ModelExecutionTelemetry`** — logged after every provider call. Feeds future weighted routing (Phase 12):
+**`ModelExecutionTelemetry`** — logged after every provider call. Phase 4.5 connects it to real post-normalization outcomes; validated history may feed Phase 10 weighted routing:
 
 ```python
 @dataclass
@@ -408,7 +464,7 @@ class ModelExecutionTelemetry:
 4. If no candidate available → walk `fallback_chain` until one succeeds or fall to `llm_stub`
 5. Log `ModelExecutionTelemetry` regardless of outcome
 
-**Not implemented yet:** multi-dimensional weighted scoring (`capability_score * 0.25 + ...`). Deferred to Phase 12 when telemetry history exists to validate weights.
+**Not implemented yet:** multi-dimensional weighted scoring (`capability_score * 0.25 + ...`). Consider it in Phase 10 only after Phase 4.5 produces trustworthy outcome telemetry.
 
 ---
 
@@ -421,12 +477,12 @@ CellModelRouter            ← Phase 2: full (Day-One deterministic policy)
   ↓ always resolves at this phase (policy is deterministic, never uncertain)
 ModelRoutingDecision
 
-TissueModelCouncil         ← Phase 6: stub now, full implementation in Phase 6
+TissueModelCouncil         ← Phase 6A: stub now, full implementation with tissue runtime
 OrganModelPolicy           ← Phase 9: stub now, full implementation in Phase 9
 OrganismRoutingAuthority   ← Phase 9: stub now, full implementation in Phase 9
 ```
 
-At Phase 2, `TissueModelCouncil`, `OrganModelPolicy`, and `OrganismRoutingAuthority` are stubs that return `None`. `CellModelRouter` always resolves because Day-One policy is deterministic. Confidence thresholds and escalation rules come online in Phases 6 and 9 when those biological layers have runtime implementations.
+At Phase 2, `TissueModelCouncil`, `OrganModelPolicy`, and `OrganismRoutingAuthority` are stubs that return `None`. `CellModelRouter` always resolves because Day-One policy is deterministic. Confidence thresholds and escalation rules come online with Phase 6A and Phase 9 after those layers have real runtime and telemetry contracts.
 
 ---
 
@@ -492,7 +548,7 @@ protein = LlmProtein(
 | `preon_systems_cell/model_routing/types.py` | `LlmProteinInstantiationRequest`, `ModelRoutingDecision`, `ModelCandidate`, `ModelExecutionTelemetry`, enums |
 | `preon_systems_cell/model_routing/registry.py` | `ProviderModelProfile`, `MODEL_REGISTRY` with default entries for 4 providers |
 | `preon_systems_cell/model_routing/cell_router.py` | `CellModelRouter` — Day-One deterministic policy |
-| `preon_systems_cell/model_routing/tissue_council.py` | `TissueModelCouncil` — stub returning `None` (Phase 6) |
+| `preon_systems_cell/model_routing/tissue_council.py` | `TissueModelCouncil` — stub returning `None` (Phase 6A) |
 | `preon_systems_cell/model_routing/organ_policy.py` | `OrganModelPolicy` — stub returning `None` (Phase 9) |
 | `preon_systems_cell/model_routing/organism_authority.py` | `OrganismRoutingAuthority` — stub returning `None` (Phase 9) |
 | `preon_systems_cell/model_routing/fallback.py` | Fallback chain builder — derives chain from registry by constraint compatibility |
@@ -508,160 +564,410 @@ Changes to existing files:
 
 | What | When |
 |---|---|
-| `TissueModelCouncil` full implementation | Phase 6 (tissue runtime) |
+| `TissueModelCouncil` full implementation | Phase 6A (tissue runtime) |
 | `OrganModelPolicy` full implementation | Phase 9 (organ coordination) |
 | `OrganismRoutingAuthority` full implementation | Phase 9 |
-| Weighted multi-dimensional scoring formula | Phase 12 (needs telemetry history to validate weights) |
-| Confidence thresholds and escalation triggers | Phase 12 |
-| Streaming (`adapter.stream()`) | Phase 14 (frontend surfaces) |
+| Weighted multi-dimensional scoring formula | Phase 10, only after validated Phase 4.5 telemetry |
+| Confidence thresholds and escalation triggers | Phase 6A/9 with the owning runtime |
+| Streaming (`adapter.stream()`) | Separate provider/runtime feature with Track D surface |
 
 ---
 
-### Cadence
+### Original implementation cadence (historical)
 
 - Week 1: `types.py` (all core objects + enums), `registry.py` with 4 provider profiles, `CellModelRouter` Day-One policy, stubs for Tissue/Organ/Organism routers, `fallback.py`
 - Week 2: Wire Ribosome to routing layer, `GenomeModule` new fields, `ModelExecutionTelemetry` logging, `AnswerProtein` routing trace, update `LlmProtein`, integration tests
 
-**After this phase:** every LLM call has a resolved provider/model identity before invocation, a full routing trace in the protein, a tested fallback chain, and execution telemetry being logged. The routing hierarchy stubs are in place for Phase 6 and Phase 9 to fill in.
+**After Phase 4.5 hardening:** every LLM call has a resolved provider/model identity before invocation, a tested fallback chain, invocation-time data policy, trace context, and post-normalization schema/repair telemetry. The routing hierarchy stubs remain in place for Phase 6A and Phase 9 to fill in.
 
 ---
 
-## Phase 3 — 5 Protein Types
+## Phase 3 — 5 Protein Types ✅ FUNCTIONAL + INTEGRATED
 **Sources:** §4 (Protein Architecture — §4.3)  
 **Effort:** M  
 **Dependency:** Phase 2
 
-### What to build
+### What was built
 
-Add `protein_type` to `GenomeModule` and create distinct execution + validation logic per type:
+`ProteinType` StrEnum in `models.py`, with distinct execution + validation logic per type:
 
 | Type | Execution | Validation |
 |---|---|---|
-| **Reasoning** | LLM call with chain-of-thought prompt | structured output, confidence >= threshold |
-| **Retrieval** | bone call (web search, DB, file) | result non-empty, source cited |
-| **Transformation** | LLM or bone for data reshaping | output schema matches declared output_schema |
-| **Aggregation** | combine N input proteins → one result | all inputs present, no contradictions |
-| **Evaluation** | score/rank another protein's output | score in [0,1], criteria stated |
+| **Reasoning** | chain-of-thought prompt | confidence ≥ `module.min_confidence` (default `DEFAULT_MIN_CONFIDENCE` = 0.5) |
+| **Retrieval** | bone call (local reference corpus) | `result` non-empty, `source`/`sources` cited |
+| **Transformation** | prompt injects declared schema | every `output_schema` key present and type-correct |
+| **Aggregation** | prompt lists and counts inputs | all `inputs` present and non-empty, no boolean contradiction |
+| **Evaluation** | prompt states criteria | `score` numeric in [0,1], `criteria` stated |
 
-Changes:
-- `GenomeModule.protein_type: ProteinType | None` (optional — defaults to Reasoning)
-- `Ribosome._build_prompt(module, signal)` — type-specific prompt templates
-- `ProteinPipeline.validate()` — type-specific validation rules
-- Default genome adds Retrieval module for `search` signal type
+Changes landed:
+- `GenomeModule.protein_type: ProteinType | None`, plus `output_schema`, `min_confidence`, `evaluation_criteria`
+- `Ribosome._build_prompt(module, signal)` — one template per type; untagged modules are prompted as Reasoning
+- `ProteinPipeline.validate(protein, signal, module=None)` — `module` is optional, so pre-Phase-3 genomes validate exactly as before
+- `knowledge.reference.lookup` bone + `bones/data/reference.py` local corpus (every entry cites a source document)
+- Default genome gains a Retrieval module for `search`; `PolicySet.allowed_signal_types` gains `search`; membrane requires a `query` field on search signals
+- `SignalClassifier` reclassifies a `query` carrying an explicit `query` key to `search`
 
-**Cadence:**
-- Week 1: Reasoning + Retrieval (most common)
-- Week 2: Transformation + Aggregation + Evaluation
+### Deliberate scope calls
+
+**Tagging is opt-in for validation.** An untagged module is *prompted* as Reasoning but gets *no* per-type validation. Defaulting validation to Reasoning would have made every existing deterministic module subject to a confidence floor it never declared. Tag a module to opt into the stricter rules.
+
+**Aggregation contradiction detection is boolean-only.** N sources disagreeing on a yes/no question is unambiguous; free-text divergence is not contradiction and needs a real `ConflictDetector`. That is Phase 7's job — see `ProteinPipeline._validate_protein_type`.
+
+**Aggregation input history changed in Phase 4.** The direct single-module path still reads caller-supplied `inputs`; execution plans now map real prior step results into the aggregation payload through `input_map`.
+
+**Phase 4.5 integration is complete.** Provider adapters request native JSON schemas, `ProteinOutputNormalizer` validates all five protein contracts, bounded repair handles recoverable wrappers, and telemetry records the real post-normalization outcome.
 
 ---
 
-## Phase 4 — Intra-Cell Coordination
+## Phase 4 — Intra-Cell Coordination ✅ FUNCTIONAL + INTEGRATED
 **Sources:** §8 (Intra-Cell Communication)  
 **Effort:** L  
 **Dependency:** Phase 3
 
-### What to build
+### What was built
 
-Currently: one signal → one module → one protein. This phase makes a cell able to run a **sequence or parallel set of proteins** to answer one signal.
+Cells can now run a **sequence or parallel dependency wave of proteins** to answer one signal. Modules without a plan retain the original one-signal/one-protein behavior.
 
 **Cell execution plan:**
 ```python
 class CellExecutionPlan:
-    steps: list[ExecutionStep]  # ordered or parallel groups
+    plan_id: str
+    steps: list[ExecutionStep]
+    final_step_id: str | None
+    fail_fast: bool
+    max_parallelism: int
 
 class ExecutionStep:
+    step_id: str
     module_id: str
-    depends_on: list[str]       # previous step IDs
-    condition: str | None       # e.g. "step_a.confidence > 0.7"
-    input_map: dict             # how to build payload from prior results
+    depends_on: list[str]
+    condition: str | None
+    input_map: dict
+    max_iterations: int
+    iterate_while: str | None
 ```
 
-**Shared state buffer:**
-- `CellRunContext` — lives for the duration of a cell's response to one signal
-- Holds: `inputs: dict`, `step_results: dict[step_id, Protein]`, `shared_state: dict`
+Delivered behavior:
+- Plans are validated for unique step IDs, known dependencies, a valid final step, and acyclic topology.
+- The runtime additionally validates that every step references a module present in the same genome.
+- `CellWorkingState` supplies the canonical `execution_context`, `shared_state_buffer`, and `result_registry` slots.
+- `$signal`, `$steps`, `$shared`, `$result`, and `$iteration` references feed prior results into later step payloads.
+- Dependency-ready steps run concurrently with a bounded worker pool. The Ribosome/provider interface is synchronous, so Phase 4 uses worker threads instead of pretending blocking provider calls are async.
+- Conditions use a call-free AST evaluator. Function calls, imports, and arbitrary attribute access are not allowed.
+- Iteration is bounded to 10 attempts per step and records whether the hard limit was reached.
+- Fail-fast and independent-branch continuation modes are supported.
+- Aggregation steps receive actual prior protein results through `input_map`, not caller-manufactured placeholder inputs.
+- Each step reserves ATP independently; resource exhaustion is a recorded step result and blocks dependants.
+- LLM proteins pass through Proteasome deconstruction, all outputs pass through Golgi, failed outputs are rolled back by Lysosome, and approved answer proteins are routed by Cytoskeleton.
+- `CellExecutionRun` captures ordered step outcomes, iteration counts, final protein identity, and the final cell working-state snapshot.
+- `SubmitSignalResponse.execution_run` exposes the run without breaking the existing final `protein` response.
+- `cell_execution` runtime events provide plan start/completion and per-step summaries.
+- Legacy genomes without `execution_plan` use the unchanged single-protein path.
 
-**Synchronisation patterns:**
-- Sequential: steps run one after another, each receives prior results
-- Parallel: steps with no `depends_on` run concurrently (asyncio gather)
-- Conditional: step skipped if condition evaluates false on prior results
-- Iterative: step can re-enqueue itself with updated payload up to N times
+### Deliberate scope calls
 
-**Key design decision:** the execution plan for a cell is defined in the genome module or generated at runtime by a Reasoning protein that decomposes the task.
+**Plans are genome-declared in Phase 4.** Generating new DAGs with a Reasoning protein belongs to Phase 8A (validated task decomposition). Keeping that boundary prevents Phase 4 from silently implementing half of Phase 8.
 
-**Cadence:**
-- Week 1: CellRunContext, shared state buffer, sequential execution
-- Week 2: Parallel execution (asyncio), conditional branching
-- Week 3: Iterative loops, integration with existing nucleus/ribosome
+**Execution-run state is cell-local but now durable.** Phase 4.5 added PostgreSQL run/step storage and owner-scoped retrieval. Cross-activation memory promotion belongs to Phase 5B; tissue and organ memory activate only when those runtimes exist.
+
+**Tests:** Phase 4 adds coverage for graph validation, safe conditions, input mapping, sequential and parallel execution, conditional skips, fail-fast and independent branches, executor failures, bounded iteration, resource exhaustion, real retrieval-to-aggregation flow, organelle routing/rollback, genome validation, and API response exposure.
 
 ---
 
-## Phase 5 — Layered Memory Architecture
+## Phase 4.5 — Runtime Hardening & Integration ✅ FUNCTIONAL + INTEGRATED
+**Sources:** §4 (Protein Architecture) + §5 (Model Interface) + §16–§18
+**Effort:** L
+**Dependency:** Phases 2–4
+**Status:** COMPLETE
+**Decision checkpoint:** ADR-008 through ADR-013 are accepted. Phase 4.5 implementation follows those decisions.
+
+### Why this phase exists
+
+Phase 4 exposed platform requirements that cannot safely wait until after tissues and organs. The runtime can coordinate multiple proteins, but live-provider output contracts, durability, trace propagation, global concurrency, and minimum security boundaries are not yet strong enough to support fan-out.
+
+### 4.5A — Structured live-provider output
+
+**Decision record:** [ADR-008 — Normalize Provider Output at a Canonical Protein Boundary](architecture/decisions/ADR-008-structured-provider-output-boundary.md) (Accepted)
+
+- Add a `ProteinOutputNormalizer` between provider completion and `ProteinPipeline`.
+- Prefer provider-native structured output/JSON schema where supported.
+- Parse and normalize each protein type:
+  - Reasoning → final answer + optional reasoning summary + confidence evidence
+  - Retrieval → result + normalized source records
+  - Transformation → declared output-schema fields
+  - Aggregation → inputs + synthesized result + disagreement metadata
+  - Evaluation → numeric score + criteria + rationale
+- Add bounded repair for recoverable JSON/schema failures; never silently invent required evidence.
+- Move `schema_valid`, `repair_required`, and failure telemetry after real normalization/validation.
+- Add mocked adapter contract tests for every protein type and provider capability class.
+
+### 4.5B — Execution service and concurrency boundary
+
+**Decision record:** [ADR-009 — Use a Shared Bounded Execution Service](architecture/decisions/ADR-009-shared-execution-service.md) (Accepted)
+
+- Offload the full synchronous organism execution from FastAPI's event loop.
+- Introduce a shared execution service instead of creating an uncoordinated worker pool per request wave.
+- Add global, per-organism, and per-provider concurrency limits.
+- Propagate deadlines and cancellation from HTTP request → cell run → step → provider call.
+- Define deterministic timeout, cancellation, and partial-result semantics.
+- Add concurrent-request, cancellation, timeout, and saturation tests.
+
+### 4.5C — Trace and telemetry foundation
+
+**Decision record:** [ADR-010 — Propagate an Explicit Hierarchical Trace Context](architecture/decisions/ADR-010-hierarchical-trace-context.md) (Accepted)
+
+- Add `TraceContext` now: `{request_id, organism_id, cell_run_id, step_id, protein_id, provider_call_id}`.
+- Propagate it through signals, runs, runtime events, routing decisions, provider telemetry, and memory provenance.
+- Connect `RuntimeTelemetryCollector` to the live runtime rather than leaving it as an unused abstraction.
+- Unify execution and provider telemetry behind one sink contract.
+- Never log raw confidential/restricted payloads by default.
+
+### 4.5D — Durable cell runs and retrieval
+
+**Decision record:** [ADR-011 — Persist Cell Runs as a Durable Execution Ledger](architecture/decisions/ADR-011-durable-execution-run-ledger.md) (Accepted)
+
+- Persist `CellExecutionRun` and ordered `ExecutionStepResult` records in PostgreSQL.
+- Preserve in-memory/PostgreSQL behavior parity.
+- Add:
+  - `GET /api/organisms/{id}/cell-runs`
+  - `GET /api/organisms/{id}/cell-runs/{run_id}`
+- Store bounded snapshots or references, not unlimited duplicate protein payloads.
+- Add migrations, round-trip persistence tests, restart/reload tests, and owner-boundary API tests.
+
+### 4.5E — Minimum security baseline
+
+**Decision record:** [ADR-012 — Enforce Canonical Data Classification at Provider Invocation](architecture/decisions/ADR-012-data-classification-and-provider-enforcement.md) (Accepted)
+
+- Replace free-form data-class strings with one canonical `DataClass` enum.
+- Propagate classification through Signal → step payload → Protein → RuntimeEvent → MemoryRecord.
+- Enforce provider/data-class compatibility immediately before model invocation.
+- Add redaction policy for events, debug bundles, and execution snapshots.
+- Describe current tenancy honestly as owner scoping; process-global stores are not a strict isolation boundary.
+
+### 4.5F — Resilience foundation
+
+**Decision record:** [ADR-013 — Use Typed Failures and Bounded Resilience Semantics](architecture/decisions/ADR-013-bounded-resilience-semantics.md) (Accepted)
+
+- Add canonical provider/protein/cell failure classes and retryability rules.
+- Retry only transient, idempotent work within explicit attempt/deadline budgets.
+- Add provider circuit breakers with static safe limits and operator-visible state.
+- Define fail-fast, partial-result, degraded-result, and cancellation semantics consistently.
+- Record fallback/circuit/timeout decisions in the trace.
+- Defer hierarchical checkpoints and recovery modes to Phase 11.
+
+### Exit gate
+
+- Live mocked adapters satisfy all five protein contracts.
+- Full request execution does not block the FastAPI event loop.
+- Global/provider concurrency and cancellation tests pass.
+- Failure classification, bounded retry, and provider circuit-breaker tests pass.
+- Every run/provider event carries a trace context.
+- Cell runs survive PostgreSQL reload and are owner-scoped.
+- Restricted data is rejected or redacted at every implemented boundary.
+- Existing backend, frontend type, package, and production-build regression gates pass.
+
+---
+
+## Phase 5A — Living Skeleton & Resource Growth ✅ FUNCTIONAL + INTEGRATED
+**Sources:** Cell Survival Requirements skeletal layer + V3 Feature 10
+**Effort:** M
+**Dependency:** Phase 4.5
+
+### Design principle
+
+The biological metaphor is authoritative. Osteoblasts, osteoclasts, and osteocytes are organism-owned cells; infrastructure records are the structural material those cells create and maintain.
+
+Capability bones remain stable `BoneContract` interfaces satisfied by enzymes. Structural bones are desired-state infrastructure resources such as database schemas, tables, indexes, blob/object namespaces, queues, topics, service contracts, and adapters.
+
+### Implemented minimum
+
+- Every newly created organism contains a skeletal tissue with first-class osteoblast, osteoclast, and osteocyte `CellRecord` instances.
+- Structural proposals are organism-scoped and record the skeletal cell responsible for growth or remodeling.
+- Planning is deterministic and side-effect-free; the exact plan is persisted with a canonical digest.
+- Approval can bind to the reviewed digest before an idempotent provider apply.
+- Applied resources record provider identity, opaque provider reference, desired definition, observed state, generation, health, and cellular provenance.
+- Scoped `ResourceGrant` records let ordinary cells use a resource without routing all data-plane traffic through skeletal cells.
+- PostgreSQL persists structural resources, proposals, plans, and grants with in-memory parity.
+- Existing unscoped proposal clients remain backward compatible.
+
+The initial provider is deliberately in-memory. A provider label such as `postgres`, `s3`, or `azure_blob` expresses intended substrate but does not silently provision live infrastructure. Live provider adapters must implement the same plan/apply/inspect boundary and pass failure/reconciliation tests before production use.
+
+### Exit gate
+
+- Genesis creates exactly one cell for each skeletal role and persists their ordinary cell lifecycle.
+- Growth is owned by an osteoblast; remodel/retire work is owned by an osteoclast.
+- Duplicate idempotency keys cannot create duplicate resources.
+- Approval of a stale or changed plan digest is rejected.
+- Cross-organism proposal and grant access is rejected.
+- Approved growth produces an inspectable resource and optional cell-scoped grant.
+- Grant revocation is durable and auditable.
+- In-memory and PostgreSQL control-plane records behave equivalently.
+- Live PostgreSQL/object-store provisioning remains a documented production-hardening item.
+
+---
+
+## Phase 5B — Durable Organism Memory & Context Construction ✅ FUNCTIONAL + INTEGRATED
 **Sources:** §15 (Memory & State Management)  
 **Effort:** L  
-**Dependency:** Phase 4
+**Dependency:** Phases 4.5 and 5A
 
 ### What to build
 
-Currently: one `MemoryRecord` type stored at organism scope. This phase adds a proper 5-layer hierarchy.
+Before Phase 5B, the runtime persisted nearly every approved final protein as an organism-scoped `MemoryRecord`. Phase 5B replaces that behavior with explicit memory admission and context construction. Its database schema and access grant are requested through Phase 5A skeletal growth rather than assumed as process-global infrastructure.
 
-**New memory scopes:**
+### Implemented minimum
+
+- Routine approved proteins are no longer automatically retained.
+- Automatic admission requires an explicit candidate marker, confidence, importance, novelty, and valid source state.
+- Operator creation remains an explicit admission path.
+- Memory records carry episodic/semantic/procedural type, trace/run/protein provenance, classification, importance, content hash, TTL, access, supersession, and skeletal storage identity.
+- The first memory operation grows an organism-owned `organism-memory` structural resource and scoped grant through Phase 5A.
+- `ContextBuilder` performs deterministic keyword retrieval, owner/class filtering, lifecycle checks, stable scoring, content deduplication, and bounded selection.
+- Selected memory is injected into LLM execution context; access metadata changes only for injected records.
+- TTL expiration, explicit supersession, duplicate consolidation, and conservative low-value aging retain auditable records rather than deleting them.
+- PostgreSQL stores and reloads the full model. The Memory inspector exposes admission, provenance, lifecycle, and access metadata.
+
+Production hardening remains partial until a live PostgreSQL deployment passes restart/concurrency/load tests and provider-specific token estimators replace the conservative character-based approximation where necessary.
+
+**State versus memory:**
 ```
-protein  → ephemeral, discarded after protein terminates
-cell     → lives for duration of CellRunContext, then promoted or discarded
-tissue   → persists across cell executions within a tissue
-organ    → domain-specific, persists across organism activations
-organism → global long-term, persists forever (current implementation)
+protein/cell-run state → remains ephemeral in CellWorkingState
+organism memory        → durable, admitted by policy, provenance-linked
+tissue memory          → deferred until Phase 6B
+organ memory           → deferred until Phase 9
 ```
 
-**Memory types to tag each record:**
-`short_term | long_term | episodic | semantic | procedural`
+**Memory model:**
+- `MemoryType`: `episodic | semantic | procedural`
+- `source_signal_id`, `source_run_id`, `source_protein_ids`, and `trace_context`
+- `data_class`, `confidence`, `importance`, `created_at`, `last_accessed_at`
+- `ttl_seconds | None`, `access_count`, `content_hash`, and version
+- explicit admission status and promotion reason
 
 **Context construction:**
 - Before each protein invocation, `ContextBuilder` assembles context:
   1. Pull from cell shared state (always)
-  2. Pull from tissue memory (if `memory_scope=tissue`)
-  3. Pull from organ memory (if relevant to domain)
-  4. Pull from organism memory (if relevant to objective)
-  5. Filter by semantic similarity (simple keyword match in v1; vector search in v2)
-  6. Truncate to token budget
+  2. Retrieve admitted organism memories by keyword relevance, type, recency, importance, and confidence
+  3. Enforce owner and data-class policy
+  4. Deduplicate by content/provenance
+  5. Truncate with a provider-aware token budget
+
+The first retrieval implementation is **keyword relevance**, not semantic similarity. Vector/embedding similarity is a later, separately evaluated retrieval mode.
+
+**Memory admission and promotion:**
+- Stop automatically persisting every approved protein.
+- Admit only outputs that satisfy configured importance, confidence, novelty, and policy rules.
+- Support explicit operator admission and deprecation.
+- Preserve source provenance; never promote an output after its source is redacted or invalidated without review.
 
 **Memory lifecycle:**
-- `ttl_seconds: int | None` — auto-expire after TTL
-- `access_count: int` — track reuse frequency
-- Garbage collection job: evict expired + zero-access memories
+- Expire records after TTL where configured.
+- Do not evict solely because `access_count == 0`; every new memory starts unused.
+- Garbage collection considers age, last access, importance, duplication, supersession, and policy.
+- Record access only when a memory is actually injected into context.
 
-**Cadence:**
-- Week 1: Memory scope enum, context builder v1 (keyword filter + TTL)
-- Week 2: Cell/tissue/organ memory promotion logic
-- Week 3: Lifecycle management, context injection into ribosome
+### Exit gate
+
+- Memory admission prevents routine low-value protein output from becoming durable memory.
+- Context construction is deterministic, token-bounded, owner-scoped, and data-class aware.
+- Provenance links memory back to trace/run/protein sources.
+- TTL, access tracking, deduplication, supersession, and garbage collection have persistence tests.
+- Retrieval quality has a small labeled relevance test set.
+- In-memory and PostgreSQL stores behave equivalently.
 
 ---
 
-## Phase 6 — Tissue Aggregation & Inter-Tissue Communication
-**Sources:** §9 (Intra-Tissue) + §10 (Inter-Tissue)  
-**Effort:** XL  
-**Dependency:** Phase 4 (intra-cell must work first)
+## Phase 5C — Hierarchical Memory Activation
+**Sources:** §15 (Memory & State Management)
+**Effort:** M per layer
+**Dependency:** Phase 5B plus the owning runtime
+
+This is not a blocking phase immediately after 5A:
+
+- Activate tissue memory with Phase 6B, after tissue ownership and contracts exist.
+- Activate organ memory with Phase 9, after organ authority and domain boundaries exist.
+- Reuse the Phase 5B admission, provenance, lifecycle, and context interfaces.
+- Never model ephemeral protein/cell working state as durable `MemoryRecord` rows.
+
+---
+
+## Phase 5.5 — Runtime Boundary Hardening ✅ FUNCTIONAL + INTEGRATED
+**Dependency:** Phases 4.5, 5A, and 5B
+
+Phase 5.5 makes the Phase 5 substrate safe to extend before tissue fan-out:
+
+- `engine.py` is a compatibility shim over modular runtime services.
+- Memory policy is immutable and versioned.
+- Recalled memory is bounded, untrusted provider context.
+- Structural work produces real skeletal-cell run/protein provenance.
+- Approval queues an idempotent structural effect and returns `202`.
+- PostgreSQL and S3-compatible adapters accept structured definitions.
+- The operator console includes a Skeleton inspector.
+
+### Exit gate
+
+- Backend and frontend regression gates pass.
+- Effect duplicate, failure, lease, and reconciliation tests pass.
+- Adversarial context tests prove memory cannot mutate authority fields.
+- PostgreSQL/S3 integration suites are opt-in through test endpoint variables.
+  Production readiness remains partial until they run against the target.
+
+---
+
+## Continuous Platform Tracks
+
+Observability, security, resilience/concurrency, and operator UX are not late sequential features. They begin in Phase 4.5 and become mandatory exit gates for every new runtime layer.
+
+### Platform Gate A — Traceability & provenance
+
+- New records/events carry trace context and stable ownership.
+- Runtime/provider telemetry is emitted after real outcomes are known.
+- Durable reconstruction is possible without exposing raw restricted payloads.
+- New metrics define retry, fallback, cache, and partial-result counting semantics.
+
+### Platform Gate B — Security & data governance
+
+- New boundaries propagate and enforce `DataClass`.
+- Owner scoping has positive and negative authorization tests.
+- Logs, caches, snapshots, exports, and debug paths apply redaction/retention policy.
+- New external effects have an explicit invocation-time authorization point.
+
+### Platform Gate C — Resilience & concurrency
+
+- New fan-out uses shared global/provider limits, deadlines, and cancellation.
+- Failure classes, retryability, idempotency, and partial-result behavior are explicit.
+- No unbounded queues, loops, retries, worker creation, or payload snapshots.
+- Failure injection and saturation tests pass before the layer is considered integrated.
+
+### Platform Track D — Operator experience
+
+- Each backend phase ships the smallest useful inspectability surface with its API/event contract.
+- Rich visualizations follow real data contracts; the UI does not invent unavailable state.
+- TypeScript contracts, touched-file lint, and production build are part of each phase gate.
+
+---
+
+## Phase 6A — Tissue Runtime MVP
+**Sources:** §9 (Intra-Tissue)
+**Effort:** L
+**Dependency:** Phases 4.5 and 5B
 
 ### What to build
 
-Currently tissues are structural containers. This phase gives them a runtime.
+Currently tissues are structural containers. Phase 6A gives one tissue a bounded runtime without also attempting inter-tissue protocols and full consensus.
 
 **Tissue runtime (`TissueRuntime`):**
 - Receives a task → distributes to N cells → waits for results → aggregates → emits one output
-- Owns the topology (hub-and-spoke, mesh, or hierarchical) per genome config
+- Uses one explicit topology per genome config; begin with hub-and-spoke
+- Propagates trace, deadline, cancellation, data class, and resource budget
+- Reuses the Phase 4 execution service and shared graph primitives
 
-**5 aggregation strategies (on `TissueRecord`):**
+**MVP aggregation strategies:**
 ```python
 class AggregationStrategy(StrEnum):
     SIMPLE = "simple"           # concatenate/merge
     WEIGHTED = "weighted"       # by confidence score
-    MAJORITY = "majority"       # most common result
-    RANKED = "ranked"           # sort by score, pick top-k
-    SYNTHESIS = "synthesis"     # send all results to LLM → synthesise
 ```
-
-**Iterative refinement loop:**
-- Tissue emits draft → evaluation cells score it → if score < threshold → re-invoke producer cells with critique → max N rounds
 
 **Cell roles within tissue (dynamic, not fixed):**
 - `producer` — generate primary output
@@ -669,31 +975,52 @@ class AggregationStrategy(StrEnum):
 - `aggregator` — merge results
 - `coordinator` — manage flow
 
-**Inter-tissue communication:**
-- Tissues communicate via `TissueSignal` (structured, typed)
-- Each tissue exposes: input schema, output schema, capability declaration
-- Request-response and pub-sub patterns
-- Tissue-to-tissue calls go through the organ's coordination layer
+Roles are execution assignments, not permanent cell types.
 
-**Cadence:**
-- Week 1–2: TissueRuntime, simple + weighted aggregation
-- Week 3: Majority voting, ranked selection
-- Week 4: Synthesis aggregation (LLM-based)
-- Week 5: Iterative refinement loop
-- Week 6: Inter-tissue communication and data contracts
+### Exit gate
+
+- One tissue can fan out to multiple cells and produce a deterministic simple/weighted result.
+- Per-cell failures, timeouts, cancellation, and partial results are explicit.
+- Global/provider concurrency limits hold under tissue fan-out.
+- Tissue runs are durable, traced, owner-scoped, and replayable from stored inputs/results.
+- PostgreSQL/in-memory parity and concurrent fan-out tests pass.
+
+---
+
+## Phase 6B — Inter-Tissue Contracts & Tissue Memory
+**Sources:** §10 (Inter-Tissue) + §15 (Tissue Memory)
+**Effort:** L
+**Dependency:** Phases 5B and 6A plus a reviewed organ coordination-policy interface. A bounded interface stub is completed before Phase 6B; the full runtime arrives in Phase 9.
+
+### What to build
+
+- `TissueSignal` with structured input/output schemas, capability declaration, trace context, deadline, and data class.
+- Request-response first; pub-sub only after a concrete event-driven use case exists.
+- Tissue-to-tissue calls pass through an explicit organ coordination policy; no direct ungoverned mesh.
+- Activate tissue memory by reusing Phase 5B admission, provenance, and lifecycle interfaces.
+- Add contract versioning and compatibility checks.
+- Add redaction and policy enforcement at the tissue boundary.
+
+### Exit gate
+
+- Versioned tissue contracts reject incompatible or disallowed messages.
+- Cross-tissue calls remain traced, bounded, cancellable, owner-scoped, and data-class safe.
+- Tissue memory cannot be read or written outside its owning tissue without an authorized promotion path.
+- Failure and contract-evolution tests cover both in-memory and PostgreSQL modes.
 
 ---
 
 ## Phase 7 — Consensus & Conflict Resolution
 **Sources:** §14 (Consensus & Conflict Resolution)  
 **Effort:** L  
-**Dependency:** Phase 6
+**Dependency:** Phase 6A
 
 ### What to build
 
 **Conflict detection:**
 - `ConflictDetector` runs after aggregation if multiple outputs exist
-- Detects: schema mismatch, semantic contradiction, confidence gap > threshold, scope mismatch
+- Deterministically detects schema mismatch, incompatible categorical/boolean claims, confidence gap, missing evidence, and scope mismatch
+- LLM-assisted semantic contradiction detection is advisory and must cite the claims it compares
 
 **5 consensus modes (selectable per GenomeModule):**
 ```python
@@ -705,10 +1032,12 @@ class ConsensusMode(StrEnum):
     DELIBERATIVE = "deliberative"
 ```
 
+Majority, ranked selection, evidence weighting, synthesis, and iterative refinement live here—not in the tissue transport phase.
+
 **Severity classification → response:**
 - Low: normalise locally, continue
 - Medium: run evaluation pass, trigger refinement
-- High: escalate to organ layer, suspend output
+- High: suspend output and emit an escalation record; route to an organ adjudicator only after Phase 9 exists
 
 **Adjudication:**
 - `Adjudicator` invoked for high-severity conflicts
@@ -719,21 +1048,25 @@ class ConsensusMode(StrEnum):
 - Max rounds configurable per tissue
 - Timeout failsafe: if no convergence by deadline → partial output with `confidence=low`
 
-**Cadence:**
-- Week 1: Conflict detection, severity classification, majority + confidence-weighted
-- Week 2: Evidence-weighted, hierarchical override
-- Week 3: Deliberative consensus, adjudication, bounded iteration
+### Exit gate
+
+- Consensus never hides unresolved disagreement; output contains dissent/evidence metadata.
+- Deterministic modes are reproducible from stored inputs.
+- Deliberative mode is bounded by rounds, deadline, ATP, and provider concurrency.
+- High-severity conflicts suspend unsafe final emission.
+- Consensus traces are durable and replayable.
+- Labeled conflict fixtures measure false-positive/false-negative behavior.
 
 ---
 
-## Phase 8 — Task Decomposition & DAG Scheduling
+## Phase 8 — Organism Task Decomposition
 **Sources:** §13 (Task Decomposition & Orchestration) + §6 (Concurrency)  
 **Effort:** XL  
-**Dependency:** Phases 4, 6
+**Dependency:** Phases 4.5, 6A, 7, plus Platform Gates A–C
 
 ### What to build
 
-Currently: one signal → one module. This phase makes the organism able to decompose a task into a dependency graph and execute it.
+Phase 4 already provides a bounded cell-local DAG scheduler. Phase 8 must extract/reuse its graph validation, dependency-state, condition, cancellation, and bounded-execution primitives rather than creating a second unrelated scheduler.
 
 **Task graph:**
 ```python
@@ -761,30 +1094,50 @@ class TaskGraph:
 - Granularity: recursively decompose until protein-executable
 
 **Scheduler:**
-- `TaskScheduler.tick()` — called on each runtime cycle
+- `TaskScheduler` is a hierarchical adapter over the shared graph executor
+- `tick()` — called on each runtime cycle
 - Dispatches all `ready` nodes in parallel up to concurrency limit
 - Handles priority queues, domain queues, retry queues, deferred queues
 
-**Adaptive replanning:**
+### Phase 8A — Static validated decomposition
+
+- Accept operator/genome-declared task graphs.
+- Allow an LLM decomposer to propose a graph, but validate topology, owner capability, budgets, data class, and policy before activation.
+- Persist graph versions and every state transition.
+- Begin with functional and temporal strategies.
+- Require deterministic replay from the accepted graph.
+
+### Phase 8B — Adaptive replanning (deferred)
+
+Adaptive graph mutation starts only after failure classification, checkpoints, traceability, and governance enforcement are active:
+
 - When a node fails or produces surprising output, `Replanner` may:
   - Alter the graph (add/remove nodes)
   - Reroute tasks to different owners
   - Inject new validation steps
   - Terminate low-value subpaths
+- Every mutation creates a new graph version with reason, actor, policy decision, and rollback reference.
 
-**Cadence:**
-- Week 1–2: TaskNode, TaskGraph, topological sort, basic scheduler
-- Week 3: Priority + domain queues
-- Week 4: Functional + temporal decomposition strategies
-- Week 5: Adaptive replanning
-- Week 6: Integration with cell execution plans (Phase 4) and tissue runtime (Phase 6)
+### Exit gate for 8A
+
+- Shared graph primitives power both Phase 4 and Phase 8 without semantic drift.
+- Invalid/cyclic/over-budget/unauthorized proposed graphs cannot activate.
+- Scheduler honors global/provider concurrency, deadline, cancellation, priority, and data policy.
+- Graph and node state survive restart and can be replayed.
+- Load tests cover queue fairness and fan-out limits.
+
+### Exit gate for 8B
+
+- Every adaptive mutation is versioned, policy-checked, traced, and reversible to a checkpoint.
+- Replanning cannot expand ATP, provider, tool, or data authority.
+- Failure-injection tests prove bounded recovery and no infinite mutation loops.
 
 ---
 
 ## Phase 9 — Organ Coordination & Collective Intelligence
 **Sources:** §11 (Organ-Level) + §12 (Collective Intelligence)  
 **Effort:** XL  
-**Dependency:** Phases 6, 7, 8
+**Dependency:** Phases 5A, 6A, 7, 8A, plus Platform Gates A–C
 
 ### What to build
 
@@ -795,34 +1148,43 @@ class TaskGraph:
 - Produces one unified organ-level output (structured result + confidence + reasoning summary)
 
 **Hierarchical control:**
-- Brain organ can issue directives to other organs via `OrganDirective`
-- Organs report back to brain via `OrganReport`
-- Brain synthesises across organs → organism decision
+- A genome policy designates which organ roles may issue directives; “brain” is a default profile, not hard-coded authority
+- Authorized coordinator organs can issue directives via `OrganDirective`
+- Organs report back to the designated coordinator via `OrganReport`
+- The designated organism coordinator synthesises across organs → organism decision
 
 **Voice unification:**
 - Each layer (tissue, organ, organism) produces one output even when many contributors exist
-- `VoiceUnifier` at each level: applies configured consensus mode → single structured output
+- `VoiceUnifier` at each level applies configured consensus mode → single structured output
+- A unified voice must retain unresolved dissent, evidence gaps, and adjudication provenance
 
 **Organism-level synthesis:**
 - Final output assembled from organ reports
 - Cross-organ conflict resolution (same mechanisms as Phase 7 but at organ scope)
 - Output includes: structured result, contributing organs, confidence, decision provenance
 
-**Cadence:**
-- Week 1–2: OrganCoordinator, tissue task distribution
-- Week 3: Sequential + parallel flow control
-- Week 4: Conditional branching + iterative organ loops
-- Week 5: Brain organ → directive loop
-- Week 6: Organism-level synthesis and voice unification
+**Organ memory activation:**
+- Activate organ-scoped memory using Phase 5B interfaces only after organ ownership/domain boundaries exist.
+- Promotion to organism memory requires explicit policy and provenance.
+
+### Exit gate
+
+- Organ authority is genome-configured, validated, and policy-bounded.
+- Organ directives cannot expand task/data/provider authority.
+- Cross-organ conflict remains visible in the final provenance report.
+- Organ task state, decisions, and memory survive restart.
+- Directive loops are deadline/ATP/iteration bounded and failure-tested.
 
 ---
 
-## Phase 10 — Concurrency & Network Optimisation
+## Phase 10 — Advanced Concurrency & Network Optimisation
 **Sources:** §6 (Concurrency) + §7 (Network Efficiency)  
-**Effort:** XL  
-**Dependency:** Phases 8, 9
+**Effort:** L–XL by optimization
+**Dependency:** Phase 4.5 concurrency/telemetry foundation plus measured demand from Phases 6–9
 
 ### What to build
+
+Basic global/provider limits, deadlines, cancellation, and event-loop safety ship in Phase 4.5. Phase 10 contains optimizations justified by production telemetry—not prerequisites deferred until after organs.
 
 **Backpressure propagation:**
 - Each layer exposes a `pressure: float` signal (0.0 = relaxed, 1.0 = saturated)
@@ -832,7 +1194,7 @@ class TaskGraph:
 **Provider-aware throttling:**
 - Track per-provider: request rate, token rate, error rate, latency p95
 - `ProviderHealthMonitor` adjusts concurrency limits dynamically
-- High latency → reduce parallel calls → shift simple tasks to local SLLMs
+- High latency → reduce parallel calls; shift simple tasks only when a configured, policy-approved local runtime exists, otherwise throttle or use an allowed fallback
 
 **Caching:**
 - `ResultCache`: hash(prompt + model + constraints) → cached response (TTL configurable)
@@ -846,22 +1208,29 @@ class TaskGraph:
 **Batching:**
 - `BatchCollector` groups compatible tasks within a 50ms dispatch window
 - Compatible = same model, same prompt template, different data payloads
-- Sends as one request, splits response back to individual proteins
+- Use only where a provider exposes a real batch API or where offline batching preserves per-task validation
+- Do not concatenate unrelated prompts into one request and call it provider batching
+- Local SLLM offloading remains optional until a supported local runtime and security model exist
 
-**Cadence:**
-- Week 1–2: ResultCache, TemplateCache, deduplication
-- Week 3: Backpressure signals between layers
-- Week 4: ProviderHealthMonitor, adaptive throttling
-- Week 5–6: BatchCollector, local SLLM offloading preference
+### Exit gate per optimization
+
+- A benchmark demonstrates a material latency/cost/throughput improvement without >10% regression in output quality or reliability.
+- Cache keys include model/version, prompt/template version, policy, data class, and relevant context.
+- Restricted data never enters a cache with broader visibility or retention.
+- Deduplication preserves caller cancellation and authorization independently.
+- Adaptive throttling is driven by validated telemetry and has safe static limits.
+- Every optimization can be disabled independently.
 
 ---
 
-## Phase 11 — Failure Resilience
+## Phase 11 — Advanced Hierarchical Resilience
 **Sources:** §16 (Failure Handling & Resilience)  
 **Effort:** L  
-**Dependency:** Phase 9
+**Dependency:** Platform Gate C plus Phases 6A, 7, and 8A
 
 ### What to build
+
+Provider timeout/retry classification, cancellation, circuit breakers, and bounded step failure are foundation work and must pass before Phase 6A. Phase 11 extends that substrate across tissue/organ/organism state.
 
 **Failure classification:**
 - `FailureClassifier` tags every error: execution / dependency / coordination / state / network / policy
@@ -891,24 +1260,28 @@ class ResilienceMode(StrEnum):
 - Per-layer configurable: tolerated retry rate, acceptable partial-output rate, max latency inflation
 - If budget exceeded → auto-escalate resilience mode
 
-**Cadence:**
-- Week 1: Failure classification, fallback path framework
-- Week 2: Resilience modes, circuit breaker per provider
-- Week 3: Checkpointing and replay
+### Exit gate
+
+- Failure classes and severity are consistent across provider, protein, cell, tissue, and task-graph layers.
+- Checkpoints are bounded, durable, encrypted/classified appropriately, and restore deterministically.
+- Recovery never expands authority or repeats acknowledged external side effects.
+- Circuit breakers and resilience modes have transition hysteresis and operator override.
+- Failure-injection tests cover provider loss, partial tissue loss, corrupt checkpoint, restart during recovery, and policy failure.
 
 ---
 
-## Phase 12 — Observability & Telemetry
+## Phase 12 — Advanced Observability, Provenance & Operations
 **Sources:** §17 (Observability & Telemetry)  
 **Effort:** L  
-**Dependency:** Phase 10
+**Dependency:** Phase 4.5 trace foundation plus the layers being observed
 
 ### What to build
 
+Trace context and connected telemetry are prerequisites in Phase 4.5. Every later phase must extend them as part of its own exit gate. Phase 12 adds advanced cross-layer operations; it is not the first point where the system becomes observable.
+
 **Hierarchical trace IDs:**
-- `TraceContext` propagated through every layer: `{organism_request_id, organ_span_id, tissue_span_id, cell_run_id, protein_call_id}`
-- Injected into every adapter call, every tissue message, every organ directive
-- All existing RuntimeEvents gain `trace_context: TraceContext`
+- Extend the Phase 4.5 `TraceContext` with organ/tissue/task spans as those layers land
+- Inject into every adapter call, tissue message, organ directive, checkpoint, and memory provenance record
 
 **Structured event model:**
 - Typed events beyond current generic RuntimeEvent:
@@ -926,23 +1299,26 @@ class ResilienceMode(StrEnum):
 **Decision provenance:**
 - Every organism-level output includes `ProvenanceReport`: contributing organs, evidence sources, consensus paths, policy checks, confidence
 
-**Cadence:**
-- Week 1: TraceContext propagation through all layers
-- Week 2: Typed event model, structured metrics
-- Week 3: Replayability API, decision provenance
+### Exit gate
+
+- Trace completeness is measured; orphaned spans/events are detectable.
+- Metrics derive from reviewed event contracts and do not double-count retries/cache hits.
+- Replay distinguishes deterministic re-execution from historical reconstruction.
+- Provenance reports preserve evidence, dissent, policy decisions, model identity, and transformations.
+- Operational dashboards expose saturation, queue depth, error budget, and degraded mode without raw sensitive payloads.
 
 ---
 
-## Phase 13 — Security & Governance
+## Phase 13 — Advanced Security & Governance
 **Sources:** §18 (Security & Governance)  
 **Effort:** M  
-**Dependency:** Phase 12
+**Dependency:** Phase 4.5 security/trace foundation plus the layers being governed
 
 ### What to build
 
 **Data classification:**
-- `DataClass` enum: `public | internal | confidential | restricted`
-- Tagged on: Signal payloads, MemoryRecords, protein outputs
+- Extend the canonical Phase 4.5 `DataClass`: `public | internal | confidential | restricted`
+- Tagged on: signals, step payloads, memories, protein outputs, events, caches, checkpoints, and exports
 - Drives: which provider can process it, how it's logged, who can see it
 
 **Policy enforcement points (6 lifecycle stages):**
@@ -955,8 +1331,9 @@ class ResilienceMode(StrEnum):
 
 **Provider allowlist:**
 - `OrganismRecord.allowed_providers: list[str]`
-- Membrane rejects signals that would require a disallowed provider
-- Sensitive signals → force local SLLM
+- Enforce provider/data-class policy immediately before provider invocation, after actual routing is known
+- The membrane may reject obviously disallowed requests, but cannot replace the invocation-time enforcement point
+- Sensitive signals may use a configured, policy-approved local model runtime; otherwise reject rather than silently reroute
 
 **Full audit log:**
 - `AuditRecord`: who, what component, what data touched, what decision made, what policy checked, outcome
@@ -964,32 +1341,48 @@ class ResilienceMode(StrEnum):
 - API: `GET /api/audit` (restricted to admin roles)
 
 **Multi-tenant isolation:**
-- Already partially done (organisms are isolated)
-- Add: strict data partitioning, separate memory spaces per organism, scoped execution contexts
+- Current state is owner scoping, not strict multi-tenant isolation
+- Add strict repository/query partitioning, owner-scoped execution contexts and caches, negative authorization tests, and database-level controls where practical
+- Evaluate PostgreSQL row-level security before claiming a database-enforced tenant boundary
+- Never use process-global in-memory dictionaries as a security boundary
 
-**Cadence:**
-- Week 1: DataClass tagging, provider allowlist enforcement
-- Week 2: 6 policy enforcement points, full audit log
+### Exit gate
+
+- All external/model/tool calls have invocation-time authorization and data-class enforcement.
+- Audit records are append-only, owner/admin scoped, trace-linked, redacted, and retention-controlled.
+- Negative cross-tenant tests cover every repository and API family.
+- Debug/export/cache/checkpoint paths cannot bypass normal classification policy.
+- Threat model and incident-response procedures are reviewed before production-hardening is claimed.
 
 ---
 
 ## Phase 14 — Frontend Visualization (Parallel Track)
 **Sources:** §17 (Dashboards) + §19 (Example Flows as UX inspiration)  
-**Effort:** L per surface (runs in parallel with backend phases)  
+**Effort:** S–L per surface (runs continuously with backend phases)
 **Dependency:** Data from each backend phase as it lands
 
-### Surfaces to build (in priority order)
+Phase 14 is the detailed form of Platform Track D. Each runtime phase ships a minimal inspectability surface; richer operator workflows follow stable durable APIs.
 
-| Surface | Depends on | What it shows |
+| Surface | Depends on | Status / scope |
 |---|---|---|
-| **Pipeline trace deep-dive** | Phase 12 (trace IDs) | Full protein→cell→tissue→organ→organism trace tree for one request |
-| **Token & cost dashboard** | Phase 2 (usage tracking) | Token usage by provider, model class, organ; cost per objective |
-| **Cell coordination view** | Phase 4 | Proteins within a cell, their execution order, shared state |
-| **Tissue aggregation view** | Phase 6 | Cell outputs side-by-side, aggregation result, consensus path |
-| **DAG visualizer** | Phase 8 | Task graph for a decomposed objective |
-| **Organ health dashboard** | Phase 9 | Organ status, active tasks, output confidence |
-| **Resilience / failure view** | Phase 11 | Fallback activations, degraded modes, checkpoint history |
-| **Governance audit log** | Phase 13 | Policy enforcement events, access control decisions |
+| **Cell coordination summary** | Phase 4 | ✅ Initial execution-run stage shipped in the pipeline trace |
+| **Cell-run browser/deep-dive** | Phase 4.5 | Durable run list/detail, step inputs/results, iterations, failure and organelle path |
+| **Trace deep-dive** | Phase 4.5 foundation; extended per layer | Protein→cell→tissue→organ→organism trace tree |
+| **Token & cost dashboard** | Phase 4.5 real usage telemetry + Phase 12 operations | Tokens/cost by provider, model, layer, objective, retry/cache outcome |
+| **Skeleton inspector** | Phase 5A | Skeletal cells, desired/observed resources, plan digest, health, grants |
+| **Memory inspector** | Phase 5B | Admission reason, provenance, relevance, access, TTL, supersession |
+| **Tissue aggregation view** | Phases 6A and 7 | Cell outputs, aggregation, dissent, evidence, consensus path |
+| **DAG visualizer** | Phase 8A | Accepted graph/version, dependency state, queues, budgets |
+| **Organ health dashboard** | Phase 9 | Organ authority, active tasks, output confidence, memory/health |
+| **Resilience / failure view** | Platform Gate C + Phase 11 | Fallbacks, circuit breakers, degraded modes, checkpoints |
+| **Governance audit log** | Platform Gate B + Phase 13 | Classification, enforcement, redaction, access decisions |
+
+### Frontend exit gate per surface
+
+- Uses durable documented API/event contracts.
+- Represents partial, failed, redacted, unavailable, and loading states honestly.
+- Does not display raw restricted payloads without an authorized endpoint.
+- TypeScript, touched-file lint, accessibility checks, and production build pass.
 
 ---
 
@@ -1012,55 +1405,57 @@ class ResilienceMode(StrEnum):
 ## Full Roadmap Summary
 
 ```
-NOW                                                                    18 MONTHS+
-│                                                                              │
-├─P1──────┤  Skeletal Capability Framework      M   · 2 weeks
-├─P2──────┤  Model Interface Layer & Provider Routing  M   · 2 weeks
-├─P3────────┤  5 Protein Types                 M   · 2 weeks
-├─P4──────────────┤  Intra-Cell Coordination   L   · 3 weeks
-├─P5────────────────────┤  Layered Memory       L   · 3 weeks
-├─P6──────────────────────────────┤  Tissue Aggregation  XL · 6 weeks
-├─P7────────────────────────────────────┤  Consensus      L   · 3 weeks
-├─P8───────────────────────────────────────────┤  Task DAG XL · 6 weeks
-├─P9──────────────────────────────────────────────────┤  Organs XL · 6 weeks
-├─P10─────────────────────────────────────────────────────┤  Concurrency XL · 6 weeks
-├─P11───────────────────────────────────────────────────────────┤  Resilience L · 3 weeks
-├─P12─────────────────────────────────────────────────────────────┤  Observability L · 3 weeks
-├─P13───────────────────────────────────────────────────────────────┤  Governance M · 2 weeks
-└─P14  (frontend, parallel track, surfaces ship as backend phases land)
+FUNCTIONAL / INTEGRATED                    NEXT                         LATER
+│ P1 · P2 · P3 · P4 · P4.5 · P5A · P5B    │                            │
+├─P6A Tissue runtime MVP ────────────────────────────────┤              │
+├─P7 Consensus ──────────────────────────────────────────┤              │
+├─P8A Static task decomposition ───────────────────────────────────┤    │
+├─P6B Inter-tissue contracts ──────────────────────────────────────┤    │
+├─P9 Organ coordination ────────────────────────────────────────────────┤
+├─P8B Adaptive replanning ──────────────────────────────────────────────┤
+├─P10 Advanced optimization ────────────────────────────────────────────┤
+├─P11 Advanced resilience ──────────────────────────────────────────────┤
+├─P12 Advanced operations/provenance ───────────────────────────────────┤
+├─P13 Advanced governance ──────────────────────────────────────────────┤
+└─P14 + Platform Tracks A–D run continuously as each layer lands
 ```
 
-| Phase | What | Effort | Unlock |
+| Phase/track | Scope | Dependency | Exit emphasis |
 |---|---|---|---|
-| P1 | Skeletal Capability Framework | M | Bone contracts + enzyme compilation + BoneCortex; capability graph; Ribosome no longer names tools directly |
-| P2 | Model Interface Layer & Provider Routing | M | `LlmProteinInstantiationRequest`, `ModelRoutingDecision`, `ProviderModelProfile` registry, `CellModelRouter` (Day-One deterministic policy), routing trace in `AnswerProtein`, `ModelExecutionTelemetry`; Tissue/Organ/Organism router stubs |
-| P3 | 5 Protein Types | M | Distinct execution + validation per protein category |
-| P4 | Intra-Cell Coordination | L | Cells run multi-protein plans, not just one module |
-| P5 | Layered Memory | L | Context builds on prior work; organism has continuity |
-| P6 | Tissue Aggregation | XL | Tissues do real work; first true collective intelligence |
-| P7 | Consensus & Conflict Resolution | L | Divergent results become coherent decisions |
-| P8 | Task Decomposition & DAG | XL | Complex objectives decompose into executable graphs |
-| P9 | Organ Coordination | XL | Strategic reasoning, brain-to-body directive loop |
-| P10 | Concurrency & Network Optimisation | XL | Scale without provider/bandwidth collapse |
-| P11 | Failure Resilience | L | Weaken intelligently instead of breaking |
-| P12 | Observability & Telemetry | L | Full trace provenance, replayability, metrics |
-| P13 | Security & Governance | M | Production-grade audit, data classification, policy |
-| P14 | Frontend (parallel) | L per surface | Operators can see and reason about the organism |
-| P15 | Future Extensions | Research | Self-healing, multimodal, autonomous goals |
+| P1–P4 | Existing functional capabilities | — | Hardened through P4.5/platform gates |
+| **P4.5** | Structured live outputs, execution service, tracing, durable runs, baseline security | P2–P4 | Complete; production deployment validation remains |
+| **P5A** | First-class skeletal cells, governed structural resources, scoped grants | P4.5 | Complete at control-plane level; live providers remain |
+| **P5B** | Admitted durable organism memory + context builder | P5A | Complete; live-load hardening remains |
+| **P5C** | Tissue/organ memory activation | Owning runtime | Reuse P5B; no premature scopes |
+| **P6A** | Tissue runtime with simple/weighted aggregation | P4.5, P5B | Bounded traced fan-out |
+| **P6B** | Inter-tissue contracts + tissue memory | P6A, P5B, reviewed organ coordination-policy interface | Versioned governed boundaries |
+| **P7** | Conflict detection, consensus, refinement | P6A | Dissent/evidence preserved |
+| **P8A** | Static validated organism task graphs | P4.5, P6A, P7, Gates A–C | Shared scheduler, durable/replayable state |
+| **P8B** | Adaptive replanning | Checkpoints + governance foundation | Versioned bounded graph mutation |
+| **P9** | Organ coordination + organ memory | P5B, P6A, P7, P8A, Gates A–C | Policy-configured authority and provenance |
+| **P10** | Measured concurrency/network optimization | P4.5 telemetry + demonstrated need | Benchmark-backed optional optimizations |
+| **P11** | Hierarchical resilience/checkpoint recovery | Gate C + P6A/P7/P8A | Failure-injection proof |
+| **P12** | Advanced cross-layer operations/provenance | Gate A + implemented layers | Trace completeness and correct metrics |
+| **P13** | Advanced governance/audit/isolation | Gate B + implemented layers | Threat-model and negative-auth proof |
+| **P14 / Track D** | Operator UX | Each backend contract | Honest, secure inspectability |
+| **P15** | Research extensions | Production-hardened foundations | Separate evidence and safety review |
 
-**Total to full production system:**
-- Solo/part-time: ~24–36 months
-- Dedicated 2-person team: ~12–18 months
-- Phases 1–5 alone give you a meaningfully smarter organism in ~3 months (solo) or ~6 weeks (2-dev)
+### Forecast policy
+
+- Do not publish a single “months to production” number for this research architecture.
+- Estimate only the next one or two phases after their design/acceptance contracts are reviewed.
+- Track forecast range, confidence, unknowns, and actual elapsed effort.
+- Re-estimate after each phase because tissue/task/organ discoveries will change downstream scope.
+- A demo milestone and a production-hardening milestone are separate forecasts.
 
 ---
 
 ## What Gives the Most Value Soonest
 
-If you want to demo the system doing real work as fast as possible:
+The next value sequence is:
 
-1. **P1 (Bones)** — immediately makes the genome much more expressive
-2. **P2 (Model Interface)** — makes LLM calls production-quality
-3. **P5 (Memory)** — gives the organism actual continuity; this is the most "organism-like" feeling unlock
-4. **P4 (Intra-Cell)** — multi-protein cells start to feel alive
-5. **P6 partial (Tissue Aggregation, simple + weighted only)** — first emergent result from multiple sources
+1. **P6A** — create the first bounded collective result from multiple cells.
+2. **P7 deterministic modes** — preserve and resolve disagreement without hiding dissent.
+3. **P8A** — accept and execute validated organism-level task graphs.
+
+Phase 4.5 is complete; do not weaken its normalization, execution, telemetry, durability, resilience, or security gates when adding fan-out.
